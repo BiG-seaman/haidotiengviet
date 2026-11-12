@@ -1,0 +1,37 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'vn.haido.mo'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'vn.haido.mo'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // Dùng một khoá ký cố định để các bản build sau cài đè được lên bản trước (không mất dữ liệu)
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug { signingConfig signingConfigs.debug }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint { abortOnError false; checkReleaseBuilds false }
+}

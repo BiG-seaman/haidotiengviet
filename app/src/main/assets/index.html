@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Hải Đồ Mở</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:#0b2233;color:#eaf2f7;font:15px/1.35 system-ui,Roboto,sans-serif;user-select:none;-webkit-user-select:none}
+canvas#map{position:absolute;inset:0;width:100%;height:100%;touch-action:none;background:#a9cbe0}
+body.night canvas#map{filter:brightness(.45) sepia(.5) hue-rotate(-30deg)}
+#top{position:absolute;top:0;left:0;right:0;background:rgba(8,28,44,.88);padding:6px 10px;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;z-index:5}
+#top .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+#top .l{font-size:11px;color:#8fb3c9;margin-right:4px}
+#top .pos{font-size:13px;font-variant-numeric:tabular-nums;color:#cfe3ef;margin-left:auto}
+#navrow{width:100%;display:none;border-top:1px solid #24465c;padding-top:4px;gap:4px 14px;flex-wrap:wrap;align-items:baseline}
+#navrow .v{color:#ffd54a}
+#btns{position:absolute;right:10px;bottom:28px;display:flex;flex-direction:column;gap:10px;z-index:5}
+.fab{width:52px;height:52px;border-radius:50%;border:0;background:rgba(8,28,44,.9);color:#fff;font-size:22px;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.fab.on{background:#0a84d6}
+#modebar,#banner{position:absolute;left:10px;right:74px;bottom:28px;background:rgba(8,28,44,.93);border-radius:12px;padding:10px;display:none;z-index:6}
+#banner{background:#c62828;bottom:auto;top:110px;right:10px;font-weight:700;font-size:18px;z-index:9}
+#popup{position:absolute;display:none;background:#fff;color:#0b2233;border-radius:12px;padding:8px;min-width:210px;max-width:280px;box-shadow:0 4px 14px rgba(0,0,0,.45);z-index:7}
+#popup .t{font-weight:700;padding:4px 6px}
+#popup .s{font-size:12px;color:#456;padding:0 6px 6px}
+#popup button{display:block;width:100%;text-align:left;border:0;background:none;padding:11px 8px;font-size:15px;color:#0b2233;border-top:1px solid #e3eaef}
+#panel{position:absolute;left:0;right:0;bottom:0;max-height:78%;background:#0f2a3d;border-radius:16px 16px 0 0;display:none;flex-direction:column;z-index:8;box-shadow:0 -4px 16px rgba(0,0,0,.5)}
+#panel header{display:flex;align-items:center;padding:12px 14px;font-size:17px;font-weight:700;border-bottom:1px solid #24465c}
+#panel header span{flex:1}
+#panel .body{overflow-y:auto;padding:8px 14px 24px}
+.row{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid #1d3d52}
+.row .g{flex:1;min-width:0}
+.row .g b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .g small{color:#8fb3c9}
+button.b{border:0;border-radius:9px;background:#1c5a80;color:#fff;padding:10px 12px;font-size:14px}
+button.b.p{background:#0a84d6}button.b.r{background:#b33a3a}button.b.x{background:none;font-size:20px;padding:4px 10px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:6px}
+.grid button{padding:16px 8px;font-size:15px}
+input[type=text],input[type=number],select{width:100%;padding:11px;border-radius:9px;border:1px solid #2c5874;background:#0b2233;color:#fff;font-size:16px;margin:4px 0 10px}
+label.sw{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid #1d3d52}
+label.sw input{width:22px;height:22px}
+#modal{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:20}
+#modal .box{background:#0f2a3d;border-radius:14px;padding:16px;width:86%;max-width:360px}
+#modal .acts{display:flex;gap:10px;justify-content:flex-end}
+#toast{position:absolute;left:50%;transform:translateX(-50%);bottom:110px;background:rgba(0,0,0,.85);padding:9px 16px;border-radius:20px;display:none;z-index:30;max-width:86%;text-align:center}
+table.w{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+table.w td,table.w th{padding:6px 4px;border-bottom:1px solid #1d3d52;text-align:right}
+table.w th{color:#8fb3c9;font-weight:500}
+table.w td:first-child,table.w th:first-child{text-align:left}
+.note{font-size:12px;color:#8fb3c9;padding:8px 0}
+#attr{position:absolute;left:6px;bottom:4px;font-size:10px;color:#123;background:rgba(255,255,255,.6);padding:1px 5px;border-radius:4px;z-index:2}
+</style>
+</head>
+<body>
+<canvas id="map"></canvas>
+<div id="top">
+  <div><span class="l">TỐC ĐỘ</span><span class="v" id="sog">--</span> <span class="l">kn</span></div>
+  <div><span class="l">HƯỚNG</span><span class="v" id="cog">--</span><span class="l">°</span></div>
+  <div class="pos" id="pos">Chưa có GPS</div>
+  <div id="navrow">
+    <div><span class="l" id="navname">ĐẾN</span></div>
+    <div><span class="l">P.VỊ</span><span class="v" id="nbrg">--</span><span class="l">°</span></div>
+    <div><span class="l">CÒN</span><span class="v" id="ndst">--</span> <span class="l">nm</span></div>
+    <div><span class="l">T.GIAN</span><span class="v" id="nttg">--</span></div>
+    <button class="b r" style="margin-left:auto;padding:6px 10px" onclick="stopNav()">Dừng</button>
+  </div>
+</div>
+<div id="attr">© OpenStreetMap · OpenSeaMap</div>
+<div id="btns">
+  <button class="fab" id="bfollow" onclick="toggleFollow()">◎</button>
+  <button class="fab" onclick="zoomBy(1)">＋</button>
+  <button class="fab" onclick="zoomBy(-1)">－</button>
+  <button class="fab" onclick="showLayers()">▤</button>
+  <button class="fab" onclick="showMenu()">☰</button>
+</div>
+<div id="modebar"></div>
+<div id="banner"></div>
+<div id="popup"></div>
+<div id="panel"></div>
+<div id="modal"></div>
+<div id="toast"></div>
+<script>
+'use strict';
+/* ================= Cầu nối với phần Android ================= */
+const NA = window.Android || null;
+const store = {
+  load(k){ try{ const s = NA ? NA.load(k) : localStorage.getItem('hd_'+k); return s ? JSON.parse(s) : null; }catch(e){ return null; } },
+  save(k,v){ const s = JSON.stringify(v); try{ if(NA) NA.save(k,s); else localStorage.setItem('hd_'+k,s); }catch(e){} }
+};
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+
+/* ================= Dữ liệu ================= */
+let wpts   = store.load('wpts')   || [];
+let routes = store.load('routes') || [];
+let tracks = store.load('tracks') || [];
+let set = Object.assign({osm:true, sea:true, charts:{}, night:false, ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
+                         view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
+let charts = [];           // tệp MBTiles đã nạp
+const saveSet = () => store.save('settings', set);
+
+/* ================= Toán hàng hải ================= */
+const R_NM = 3440.065, D2R = Math.PI/180;
+function distNm(a,b){ const p1=a.lat*D2R,p2=b.lat*D2R,dl=(b.lon-a.lon)*D2R,dp=p2-p1;
+  const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2; return 2*R_NM*Math.asin(Math.min(1,Math.sqrt(h))); }
+function bearing(a,b){ const p1=a.lat*D2R,p2=b.lat*D2R,dl=(b.lon-a.lon)*D2R;
+  const y=Math.sin(dl)*Math.cos(p2), x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+  return (Math.atan2(y,x)/D2R+360)%360; }
+function fmtDM(v,pos,neg){ const h=v>=0?pos:neg; v=Math.abs(v); const d=Math.floor(v); let m=(v-d)*60;
+  if(m>=59.9995){ m=0; return (d+1)+'°00.000\''+h; } return d+'°'+(m<10?'0':'')+m.toFixed(3)+'\''+h; }
+const fmtPos = p => fmtDM(p.lat,'N','S')+'  '+fmtDM(p.lon,'E','W');
+const fmtNm = d => d<0.1 ? Math.round(d*1852)+' m' : (d<10?d.toFixed(2):d.toFixed(1))+' nm';
+const fmt3 = d => String(Math.round(d)%360).padStart(3,'0');
+function fmtDur(h){ if(!isFinite(h)) return '--'; const m=Math.round(h*60); return m<60 ? m+'ph' : Math.floor(m/60)+'g'+String(m%60).padStart(2,'0'); }
+function pathNm(pts){ let d=0; for(let i=1;i<pts.length;i++) d+=distNm(pts[i-1],pts[i]); return d; }
+
+/* ================= Phép chiếu Mercator ================= */
+const lon2x = lon => (lon+180)/360;
+const lat2y = lat => { const s=Math.sin(Math.max(-85.05,Math.min(85.05,lat))*D2R); return 0.5-Math.log((1+s)/(1-s))/(4*Math.PI); };
+const x2lon = x => x*360-180;
+const y2lat = y => 360/Math.PI*Math.atan(Math.exp((0.5-y)*2*Math.PI))-90;
+
+/* ================= Bản đồ ================= */
+const cv = $('map'), ctx = cv.getContext('2d');
+let W=0,H=0,DPR=1;
+const S = { cx:lon2x(set.view.lon), cy:lat2y(set.view.lat), zoom:set.view.zoom };
+const scale = () => 256*Math.pow(2,S.zoom);
+const ll2s = (lat,lon) => { const k=scale(); return [(lon2x(lon)-S.cx)*k+W/2, (lat2y(lat)-S.cy)*k+H/2]; };
+const s2ll = (x,y) => { const k=scale(); return {lat:y2lat(S.cy+(y-H/2)/k), lon:x2lon(S.cx+(x-W/2)/k)}; };
+let dirty=true; const redraw = () => { if(!dirty){ dirty=true; requestAnimationFrame(draw); } };
+function resize(){ DPR=window.devicePixelRatio||1; W=cv.clientWidth; H=cv.clientHeight; cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR); dirty=false; redraw(); }
+window.addEventListener('resize', resize);
+
+const tiles = new Map(); const MAXT = 500;
+function getTile(L,z,x,y){
+  const key=L.id+'/'+z+'/'+x+'/'+y; let t=tiles.get(key);
+  if(t){ tiles.delete(key); tiles.set(key,t); if(t.fail && Date.now()-t.fail>30000){ tiles.delete(key); t=null; } }
+  if(!t){ const img=new Image(); t={img,ok:false,fail:0};
+    img.onload=()=>{ t.ok=true; redraw(); }; img.onerror=()=>{ t.fail=Date.now(); };
+    img.src=L.url(z,x,y); tiles.set(key,t);
+    if(tiles.size>MAXT){ const k=tiles.keys().next().value; tiles.delete(k); } }
+  return t.ok ? t.img : null;
+}
+function peekTile(L,z,x,y){ const t=tiles.get(L.id+'/'+z+'/'+x+'/'+y); return t&&t.ok ? t.img : null; }
+function activeLayers(){
+  const a=[];
+  if(set.osm) a.push({id:'osm',min:0,max:19,url:(z,x,y)=> NA ? `/t/osm/${z}/${x}/${y}` : `https://tile.openstreetmap.org/${z}/${x}/${y}.png`});
+  if(set.sea) a.push({id:'sea',min:9,max:18,nofallback:true,url:(z,x,y)=> NA ? `/t/sea/${z}/${x}/${y}` : `https://tiles.openseamap.org/seamark/${z}/${x}/${y}.png`});
+  for(const c of charts) if(set.charts[c.id]!==false && c.format!=='pbf')
+    a.push({id:'m_'+c.id,min:c.minzoom,max:c.maxzoom,bounds:c.bounds,over:true,url:(z,x,y)=>`/m/${encodeURIComponent(c.id)}/${z}/${x}/${y}`});
+  return a;
+}
+function drawLayer(L){
+  let tz=Math.round(S.zoom);
+  if(tz>L.max){ if(!L.over && tz>L.max+2) return; if(L.over && tz>L.max+4) return; tz=L.max; }
+  if(tz<L.min) return;
+  const n=1<<tz, sc=Math.pow(2,S.zoom-tz)*256;      // px màn hình cho mỗi ô
+  const x0=S.cx*n-W/2/sc, y0=S.cy*n-H/2/sc;         // toạ độ ô ở góc trái trên
+  const tx0=Math.floor(x0), tx1=Math.floor(x0+W/sc), ty0=Math.max(0,Math.floor(y0)), ty1=Math.min(n-1,Math.floor(y0+H/sc));
+  let bx0=-1e9,bx1=1e9,by0=-1e9,by1=1e9;
+  if(L.bounds){ bx0=Math.floor(lon2x(L.bounds[0])*n); bx1=Math.floor(lon2x(L.bounds[2])*n); by0=Math.floor(lat2y(L.bounds[3])*n); by1=Math.floor(lat2y(L.bounds[1])*n); }
+  for(let ty=ty0;ty<=ty1;ty++) for(let tx=tx0;tx<=tx1;tx++){
+    const wx=((tx%n)+n)%n;
+    if(wx<bx0||wx>bx1||ty<by0||ty>by1) continue;
+    const px=Math.round((tx-x0)*sc), py=Math.round((ty-y0)*sc), pw=Math.round((tx+1-x0)*sc)-px, ph=Math.round((ty+1-y0)*sc)-py;
+    const img=getTile(L,tz,wx,ty);
+    if(img){ ctx.drawImage(img,px,py,pw,ph); continue; }
+    if(L.nofallback) continue;
+    for(let d=1;d<=5&&tz-d>=L.min;d++){            // tạm vẽ ô ở mức thu nhỏ hơn trong khi chờ
+      const p=peekTile(L,tz-d,wx>>d,ty>>d); if(!p) continue;
+      const f=1<<d, sw=p.width/f, sh=p.height/f;
+      ctx.drawImage(p,(wx%f)*sw,(ty%f)*sh,sw,sh,px,py,pw,ph); break; }
+  }
+}
+
+/* ================= Trạng thái hàng hải ================= */
+let fix=null;            // {lat,lon,sog,cog,acc,t}
+let follow=true;
+let mode=null, modePts=[]; // 'measure' | 'route'
+let nav=null;            // {name, pts:[...], idx}
+let anchor=store.load('anchor'); let anchorAlarm=false;
+let rec=store.load('rec');   // vết đang ghi {pts:[[lat,lon,t]]}
+const ais=new Map(); let aisStatus='Chưa kết nối';
+
+/* ================= Vẽ ================= */
+function line(pts,color,w,dash){ if(pts.length<2) return; ctx.beginPath();
+  pts.forEach((p,i)=>{ const [x,y]=ll2s(p.lat,p.lon); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.strokeStyle=color; ctx.lineWidth=w; ctx.setLineDash(dash||[]); ctx.lineJoin='round'; ctx.stroke(); ctx.setLineDash([]); }
+function label(t,x,y,col){ ctx.font='600 13px system-ui,sans-serif'; ctx.lineWidth=3; ctx.strokeStyle='rgba(255,255,255,.9)'; ctx.strokeText(t,x,y); ctx.fillStyle=col||'#102a3c'; ctx.fillText(t,x,y); }
+function dot(x,y,r,fill,stroke){ ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fillStyle=fill; ctx.fill(); if(stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=2; ctx.stroke(); } }
+function draw(){
+  dirty=false;
+  ctx.setTransform(DPR,0,0,DPR,0,0); ctx.fillStyle='#a9cbe0'; ctx.fillRect(0,0,W,H);
+  for(const L of activeLayers()) drawLayer(L);
+  // vết đã lưu + vết đang ghi
+  for(const t of tracks) if(t.show!==false) line(t.pts.map(p=>({lat:p[0],lon:p[1]})),'#8e24aa',2.5);
+  if(rec) line(rec.pts.map(p=>({lat:p[0],lon:p[1]})),'#e53935',3);
+  // tuyến
+  for(const r of routes) if(r.show!==false){ line(r.pts,'#ef6c00',3,[8,6]);
+    r.pts.forEach((p,i)=>{ const [x,y]=ll2s(p.lat,p.lon); dot(x,y,5,'#fff','#ef6c00'); if(i===0) label(r.name,x+8,y-8,'#8a3d00'); }); }
+  // dẫn đường
+  if(nav){ const rest=nav.pts.slice(nav.idx); if(fix) line([fix,...rest],'#d50000',3.5); else line(rest,'#d50000',3.5);
+    const t=nav.pts[nav.idx], [x,y]=ll2s(t.lat,t.lon); dot(x,y,9,'rgba(213,0,0,.25)','#d50000'); }
+  // điểm đánh dấu
+  for(const w of wpts){ const [x,y]=ll2s(w.lat,w.lon); if(x<-50||y<-50||x>W+50||y>H+50) continue;
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-8,y-20); ctx.arc(x,y-22,8,Math.PI,0); ctx.lineTo(x,y); ctx.fillStyle='#d81b60'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+    if(S.zoom>=8) label(w.name,x+11,y-18); }
+  // đo / tạo tuyến
+  if(mode){ const col=mode==='measure'?'#00695c':'#ef6c00'; line(modePts,col,3,[6,5]);
+    modePts.forEach((p,i)=>{ const [x,y]=ll2s(p.lat,p.lon); dot(x,y,6,'#fff',col);
+      if(i>0) label(fmtNm(distNm(modePts[i-1],p))+' · '+fmt3(bearing(modePts[i-1],p))+'°',x+9,y+4,col); }); }
+  // AIS
+  const now=Date.now();
+  for(const [id,a] of ais){ if(now-a.t>600000){ ais.delete(id); continue; } if(a.lat==null) continue;
+    const [x,y]=ll2s(a.lat,a.lon); if(x<-30||y<-30||x>W+30||y>H+30) continue;
+    const ang=((a.cog!=null&&a.cog<360)?a.cog:(a.hdg!=null&&a.hdg<360?a.hdg:0))*D2R;
+    ctx.save(); ctx.translate(x,y); ctx.rotate(ang); ctx.beginPath(); ctx.moveTo(0,-13); ctx.lineTo(7,9); ctx.lineTo(-7,9); ctx.closePath();
+    ctx.fillStyle=now-a.t>180000?'rgba(120,120,120,.7)':'rgba(46,160,67,.85)'; ctx.fill(); ctx.strokeStyle='#103'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
+    if(S.zoom>=11) label(a.name||String(id),x+10,y+4,'#1b5e20'); }
+  // neo
+  if(anchor){ const [x,y]=ll2s(anchor.lat,anchor.lon); const mpp=40075016.686*Math.cos(anchor.lat*D2R)/scale();
+    ctx.beginPath(); ctx.arc(x,y,anchor.r/mpp,0,7); ctx.fillStyle=anchorAlarm?'rgba(213,0,0,.18)':'rgba(10,132,214,.14)'; ctx.fill();
+    ctx.strokeStyle=anchorAlarm?'#d50000':'#0a84d6'; ctx.lineWidth=2; ctx.stroke(); label('⚓',x-7,y+5,'#0a3d62'); }
+  // tàu
+  if(fix){ const [x,y]=ll2s(fix.lat,fix.lon);
+    if(fix.sog>0.5&&fix.cog!=null){ const mpp=40075016.686*Math.cos(fix.lat*D2R)/scale(); const len=Math.min(fix.sog*1852/6/mpp,Math.max(W,H)); // vectơ 10 phút
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.sin(fix.cog*D2R)*len,y-Math.cos(fix.cog*D2R)*len); ctx.strokeStyle='#0d47a1'; ctx.lineWidth=2; ctx.stroke();
+      ctx.save(); ctx.translate(x,y); ctx.rotate(fix.cog*D2R); ctx.beginPath(); ctx.moveTo(0,-17); ctx.lineTo(10,12); ctx.lineTo(0,6); ctx.lineTo(-10,12); ctx.closePath();
+      ctx.fillStyle='#1565c0'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
+    } else dot(x,y,9,'#1565c0','#fff'); }
+  drawScale();
+  set.view={lat:y2lat(S.cy),lon:x2lon(S.cx),zoom:S.zoom};
+}
+function drawScale(){ const lat=y2lat(S.cy), nmpp=40075016.686*Math.cos(lat*D2R)/scale()/1852;
+  const steps=[0.01,0.02,0.05,0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000]; let v=steps[0];
+  for(const s of steps){ if(s/nmpp<=120) v=s; }
+  const w=v/nmpp, x=10, y=H-26; ctx.fillStyle='rgba(255,255,255,.75)'; ctx.fillRect(x-4,y-16,w+8,22);
+  ctx.strokeStyle='#102a3c'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,y-5); ctx.lineTo(x,y); ctx.lineTo(x+w,y); ctx.lineTo(x+w,y-5); ctx.stroke();
+  ctx.fillStyle='#102a3c'; ctx.font='12px system-ui,sans-serif'; ctx.fillText(v<0.1?Math.round(v*1852)+' m':v+' nm',x+4,y-4); }
+
+/* ================= Thao tác chạm ================= */
+const ptrs=new Map(); let g=null, lpTimer=null, lastTap=0;
+function zoomAt(px,py,z){ z=Math.max(2,Math.min(20,z)); const k0=scale(); const wx=S.cx+(px-W/2)/k0, wy=S.cy+(py-H/2)/k0;
+  S.zoom=z; const k=scale(); S.cx=wx-(px-W/2)/k; S.cy=Math.max(0,Math.min(1,wy-(py-H/2)/k)); redraw(); }
+function zoomBy(d){ zoomAt(W/2,H/2,Math.round(S.zoom)+d); saveSetSoon(); }
+let ssT=null; const saveSetSoon=()=>{ clearTimeout(ssT); ssT=setTimeout(saveSet,1500); };
+cv.addEventListener('pointerdown',e=>{ cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size===1){ g={x0:e.clientX,y0:e.clientY,t0:Date.now(),moved:false,pinch:false};
+    clearTimeout(lpTimer); lpTimer=setTimeout(()=>{ if(g&&!g.moved&&!g.pinch){ g.long=true; longPress(g.x0,g.y0); } },600);
+  } else if(ptrs.size===2){ clearTimeout(lpTimer); const [a,b]=[...ptrs.values()]; g.pinch=true; g.d0=Math.hypot(a.x-b.x,a.y-b.y)||1; g.z0=S.zoom; } });
+cv.addEventListener('pointermove',e=>{ const p=ptrs.get(e.pointerId); if(!p||!g) return; const dx=e.clientX-p.x, dy=e.clientY-p.y; p.x=e.clientX; p.y=e.clientY;
+  if(ptrs.size===1&&!g.long){ if(!g.moved&&Math.hypot(e.clientX-g.x0,e.clientY-g.y0)<10) return;
+    if(!g.moved){ g.moved=true; clearTimeout(lpTimer); hidePopup(); if(follow){ follow=false; updFollow(); } }
+    const k=scale(); S.cx-=dx/k; S.cy=Math.max(0,Math.min(1,S.cy-dy/k)); redraw();
+  } else if(ptrs.size===2){ const [a,b]=[...ptrs.values()]; const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
+    zoomAt((a.x+b.x)/2,(a.y+b.y)/2,g.z0+Math.log2(d/g.d0)); } });
+function pup(e){ if(!ptrs.has(e.pointerId)) return; ptrs.delete(e.pointerId); clearTimeout(lpTimer);
+  if(ptrs.size===0&&g){ if(!g.moved&&!g.pinch&&!g.long&&Date.now()-g.t0<450){ const now=Date.now();
+      if(now-lastTap<300&&!mode){ zoomAt(e.clientX,e.clientY,S.zoom+1); lastTap=0; } else { lastTap=now; tap(e.clientX,e.clientY); } }
+    g=null; saveSetSoon(); } }
+cv.addEventListener('pointerup',pup); cv.addEventListener('pointercancel',pup);
+cv.addEventListener('wheel',e=>{ e.preventDefault(); zoomAt(e.clientX,e.clientY,S.zoom-e.deltaY/400); },{passive:false});
+
+function hit(x,y){ let best=null,bd=28;
+  for(const w of wpts){ const [sx,sy]=ll2s(w.lat,w.lon); const d=Math.hypot(sx-x,sy-12-y); if(d<bd){ bd=d; best={type:'w',o:w}; } }
+  for(const [id,a] of ais){ if(a.lat==null) continue; const [sx,sy]=ll2s(a.lat,a.lon); const d=Math.hypot(sx-x,sy-y); if(d<bd){ bd=d; best={type:'a',o:a,id}; } }
+  return best; }
+function tap(x,y){ const p=s2ll(x,y);
+  if(mode){ modePts.push(p); updMode(); redraw(); return; }
+  if($('popup').style.display==='block'){ hidePopup(); return; }
+  const h=hit(x,y); if(!h) return;
+  if(h.type==='w') wptPopup(h.o,x,y);
+  else { const a=h.o; let s='MMSI '+h.id+'<br>'+fmtPos(a)+'<br>Tốc độ '+(a.sog!=null?a.sog.toFixed(1)+' kn':'--')+' · Hướng '+(a.cog!=null&&a.cog<360?fmt3(a.cog)+'°':'--');
+    if(fix) s+='<br>Cách tàu '+fmtNm(distNm(fix,a))+' · P.vị '+fmt3(bearing(fix,a))+'°';
+    showPopup(x,y,esc(a.name||'Tàu AIS'),s,[]); } }
+function longPress(x,y){ if(mode) return; const p=s2ll(x,y); let s=fmtPos(p);
+  if(fix) s+='<br>Cách tàu '+fmtNm(distNm(fix,p))+' · P.vị '+fmt3(bearing(fix,p))+'°';
+  showPopup(x,y,'Vị trí đã chọn',s,[
+    ['📍 Đánh dấu điểm',()=>addWpt(p)],
+    ['🧭 Đi tới đây',()=>startNav('Điểm chọn',[p])],
+    ['📏 Đo từ đây',()=>{ startMode('measure'); modePts.push(p); updMode(); }],
+    ['🌬 Thời tiết tại đây',()=>showWeather(p)] ]); }
+let popActs=[];
+function showPopup(x,y,title,sub,acts){ const el=$('popup'); popActs=acts;
+  el.innerHTML=`<div class="t">${title}</div><div class="s">${sub}</div>`+acts.map((a,i)=>`<button onclick="popAct(${i})">${a[0]}</button>`).join('');
+  el.style.display='block'; const r=el.getBoundingClientRect();
+  el.style.left=Math.max(6,Math.min(W-r.width-6,x-r.width/2))+'px'; el.style.top=(y+r.height+20>H?Math.max(6,y-r.height-14):y+14)+'px'; }
+function popAct(i){ const f=popActs[i][1]; hidePopup(); f(); }
+function hidePopup(){ $('popup').style.display='none'; }
+function wptPopup(w,x,y){ let s=fmtPos(w); if(fix) s+='<br>Cách tàu '+fmtNm(distNm(fix,w))+' · P.vị '+fmt3(bearing(fix,w))+'°';
+  showPopup(x,y,esc(w.name),s,[ ['🧭 Đi tới điểm này',()=>startNav(w.name,[w])], ['✏️ Đổi tên',()=>renameWpt(w)], ['🗑 Xoá',()=>delWpt(w.id)] ]); }
+
+/* ================= Hộp thoại, thông báo ================= */
+let toastT=null; function toast(m){ const t=$('toast'); t.textContent=m; t.style.display='block'; clearTimeout(toastT); toastT=setTimeout(()=>t.style.display='none',2800); }
+let modalCb=null;
+function ask(title,def,cb,type){ modalCb=cb; $('modal').innerHTML=`<div class="box"><b>${esc(title)}</b><input id="mi" type="${type||'text'}" value="${esc(def)}"><div class="acts"><button class="b" onclick="closeModal()">Huỷ</button><button class="b p" onclick="okModal()">Đồng ý</button></div></div>`;
+  $('modal').style.display='flex'; setTimeout(()=>{ const i=$('mi'); i.focus(); i.select&&i.select(); },50); }
+function confirmBox(msg,cb){ modalCb=cb; $('modal').innerHTML=`<div class="box"><p>${esc(msg)}</p><div class="acts"><button class="b" onclick="closeModal()">Huỷ</button><button class="b r" onclick="okModal()">Đồng ý</button></div></div>`; $('modal').style.display='flex'; }
+function okModal(){ const i=$('mi'); const v=i?i.value.trim():true; const cb=modalCb; closeModal(); if(cb&&(v!=='')) cb(v); }
+function closeModal(){ $('modal').style.display='none'; modalCb=null; }
+function openPanel(title,html){ hidePopup(); $('panel').innerHTML=`<header><span>${title}</span><button class="b x" onclick="closePanel()">✕</button></header><div class="body">${html}</div>`; $('panel').style.display='flex'; }
+function closePanel(){ $('panel').style.display='none'; }
+window.onBack=function(){ if($('modal').style.display==='flex'){ closeModal(); return true; }
+  if($('panel').style.display==='flex'){ closePanel(); return true; }
+  if($('popup').style.display==='block'){ hidePopup(); return true; }
+  if(mode){ endMode(); return true; } return false; };
+
+/* ================= GPS ================= */
+window.onGps=function(lat,lon,spd,brg,acc,t){
+  const sog=(spd>=0?spd:0)*1.943844;
+  fix={lat,lon,sog,cog:(brg>=0&&sog>0.3)?brg:(fix?fix.cog:null),acc,t:t||Date.now()};
+  $('sog').textContent=sog.toFixed(1); $('cog').textContent=fix.cog!=null?fmt3(fix.cog):'--'; $('pos').textContent=fmtPos(fix);
+  if(follow&&!g){ S.cx=lon2x(lon); S.cy=lat2y(lat); }
+  if(rec){ const l=rec.pts[rec.pts.length-1]; if(!l||distNm({lat:l[0],lon:l[1]},fix)*1852>12){ rec.pts.push([+lat.toFixed(6),+lon.toFixed(6),fix.t]); if(rec.pts.length%15===0) store.save('rec',rec); } }
+  updNav(); checkAnchor(); redraw(); };
+function toggleFollow(){ follow=!follow; if(follow){ if(fix){ S.cx=lon2x(fix.lon); S.cy=lat2y(fix.lat); if(S.zoom<10) S.zoom=13; redraw(); } else toast('Đang chờ tín hiệu GPS…'); } updFollow(); }
+function updFollow(){ $('bfollow').classList.toggle('on',follow); }
+
+/* ================= Điểm đánh dấu ================= */
+function addWpt(p){ ask('Tên điểm đánh dấu','Điểm '+(wpts.length+1),name=>{ wpts.push({id:uid(),name,lat:p.lat,lon:p.lon}); store.save('wpts',wpts); redraw(); toast('Đã lưu điểm'); }); }
+function renameWpt(w){ ask('Đổi tên điểm',w.name,n=>{ w.name=n; store.save('wpts',wpts); redraw(); }); }
+function delWpt(id){ wpts=wpts.filter(w=>w.id!==id); store.save('wpts',wpts); redraw(); if($('panel').style.display==='flex') showWpts(); }
+function goWpt(id){ const w=wpts.find(w=>w.id===id); if(!w) return; closePanel(); follow=false; updFollow(); S.cx=lon2x(w.lon); S.cy=lat2y(w.lat); if(S.zoom<11) S.zoom=13; redraw(); }
+function navWpt(id){ const w=wpts.find(w=>w.id===id); if(w){ closePanel(); startNav(w.name,[w]); } }
+function addWptByCoord(){ ask('Nhập toạ độ (vĩ độ, kinh độ) dạng thập phân', fix?fix.lat.toFixed(5)+', '+fix.lon.toFixed(5):'16.00000, 108.00000', v=>{
+  const m=v.split(/[,;\s]+/).map(Number); if(m.length<2||!isFinite(m[0])||!isFinite(m[1])||Math.abs(m[0])>90||Math.abs(m[1])>180){ toast('Toạ độ không hợp lệ'); return; } addWpt({lat:m[0],lon:m[1]}); }); }
+function showWpts(){ let h=`<div class="grid"><button class="b p" onclick="closePanel();fix?addWpt(fix):toast('Chưa có GPS')">📍 Đánh dấu vị trí tàu</button><button class="b" onclick="addWptByCoord()">⌨ Nhập toạ độ</button></div>`;
+  h+=wpts.length?wpts.map(w=>`<div class="row"><div class="g" onclick="goWpt('${w.id}')"><b>${esc(w.name)}</b><small>${fmtPos(w)}${fix?' · '+fmtNm(distNm(fix,w)):''}</small></div><button class="b" onclick="navWpt('${w.id}')">Đi tới</button><button class="b r" onclick="delWpt('${w.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có điểm nào. Nhấn giữ trên hải đồ để đánh dấu.</p>';
+  openPanel('Điểm đánh dấu',h); }
+
+/* ================= Đo & tạo tuyến ================= */
+function startMode(m){ closePanel(); hidePopup(); mode=m; modePts=[]; updMode(); redraw(); }
+function endMode(){ mode=null; modePts=[]; $('modebar').style.display='none'; redraw(); }
+function undoMode(){ modePts.pop(); updMode(); redraw(); }
+function updMode(){ const b=$('modebar'); if(!mode){ b.style.display='none'; return; }
+  const d=pathNm(modePts); const info=modePts.length?`${modePts.length} điểm · tổng ${fmtNm(d)}`:'Chạm lên hải đồ để thêm điểm';
+  b.innerHTML=`<div style="margin-bottom:8px"><b>${mode==='measure'?'📏 Đo khoảng cách':'〰 Tạo tuyến'}</b> — ${info}</div><div style="display:flex;gap:8px">`+
+    `<button class="b" onclick="undoMode()">Hoàn tác</button>`+(mode==='route'?`<button class="b p" onclick="saveRoute()">Lưu tuyến</button>`:'')+`<button class="b r" onclick="endMode()">${mode==='route'?'Huỷ':'Xong'}</button></div>`;
+  b.style.display='block'; }
+function saveRoute(){ if(modePts.length<2){ toast('Cần ít nhất 2 điểm'); return; } const pts=modePts.slice();
+  ask('Tên tuyến','Tuyến '+(routes.length+1),name=>{ routes.push({id:uid(),name,pts}); store.save('routes',routes); endMode(); toast('Đã lưu tuyến'); }); }
+function showRoutes(){ let h=`<div class="grid"><button class="b p" onclick="startMode('route')">＋ Tạo tuyến mới</button></div>`;
+  h+=routes.length?routes.map(r=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${r.show!==false?'checked':''} onchange="togRoute('${r.id}',this.checked)"><div class="g" onclick="fitPts('${r.id}','r')"><b>${esc(r.name)}</b><small>${r.pts.length} điểm · ${fmtNm(pathNm(r.pts))}</small></div><button class="b" onclick="navRoute('${r.id}')">Chạy</button><button class="b" onclick="navRoute('${r.id}',1)">Ngược</button><button class="b r" onclick="delRoute('${r.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có tuyến nào.</p>';
+  openPanel('Tuyến đường',h); }
+function togRoute(id,v){ const r=routes.find(r=>r.id===id); if(r){ r.show=v; store.save('routes',routes); redraw(); } }
+function delRoute(id){ confirmBox('Xoá tuyến này?',()=>{ routes=routes.filter(r=>r.id!==id); store.save('routes',routes); redraw(); showRoutes(); }); }
+function navRoute(id,rev){ const r=routes.find(r=>r.id===id); if(!r) return; closePanel(); startNav(r.name,rev?r.pts.slice().reverse():r.pts.slice()); }
+function fitPts(id,kind){ const o=kind==='r'?routes.find(r=>r.id===id):tracks.find(t=>t.id===id); if(!o||!o.pts.length) return;
+  const ps=o.pts.map(p=>Array.isArray(p)?{lat:p[0],lon:p[1]}:p); fitBounds([Math.min(...ps.map(p=>p.lon)),Math.min(...ps.map(p=>p.lat)),Math.max(...ps.map(p=>p.lon)),Math.max(...ps.map(p=>p.lat))]); closePanel(); }
+function fitBounds(b){ follow=false; updFollow(); const x0=lon2x(b[0]),x1=lon2x(b[2]),y0=lat2y(b[3]),y1=lat2y(b[1]);
+  S.cx=(x0+x1)/2; S.cy=(y0+y1)/2; const zx=Math.log2(W*0.85/256/Math.max(1e-9,x1-x0)), zy=Math.log2(H*0.7/256/Math.max(1e-9,y1-y0));
+  S.zoom=Math.max(2,Math.min(17,Math.min(zx,zy))); redraw(); saveSetSoon(); }
+
+/* ================= Dẫn đường ================= */
+function startNav(name,pts){ nav={name,pts,idx:0}; $('navrow').style.display='flex'; updNav(); redraw(); toast('Bắt đầu dẫn đường: '+name); }
+function stopNav(){ nav=null; $('navrow').style.display='none'; redraw(); }
+function updNav(){ if(!nav) return; const t=nav.pts[nav.idx];
+  $('navname').textContent=(nav.pts.length>1?`${nav.name} (${nav.idx+1}/${nav.pts.length})`:nav.name).toUpperCase().slice(0,26);
+  if(!fix){ $('nbrg').textContent='--'; $('ndst').textContent='--'; $('nttg').textContent='--'; return; }
+  let d=distNm(fix,t);
+  if(d<0.03){ if(nav.idx<nav.pts.length-1){ nav.idx++; toast('Đã tới điểm '+nav.idx+', chuyển sang điểm kế'); return updNav(); } else { toast('Đã tới đích: '+nav.name); if(NA) NA.beep(); stopNav(); return; } }
+  const total=d+pathNm(nav.pts.slice(nav.idx));
+  $('nbrg').textContent=fmt3(bearing(fix,t)); $('ndst').textContent=(d<10?d.toFixed(2):d.toFixed(1)); $('nttg').textContent=fix.sog>0.5?fmtDur(total/fix.sog):'--'; }
+
+/* ================= Vết đi ================= */
+function toggleRec(){ if(rec){ if(rec.pts.length>1){ const d=new Date(); tracks.push({id:uid(),name:'Vết '+d.toLocaleDateString('vi-VN')+' '+d.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}),pts:rec.pts}); store.save('tracks',tracks); toast('Đã lưu vết đi'); } else toast('Vết quá ngắn, không lưu');
+    rec=null; store.save('rec',null); } else { rec={pts:[]}; store.save('rec',rec); toast('Đang ghi vết đi'); }
+  showTracks(); redraw(); }
+function showTracks(){ let h=`<div class="grid"><button class="b ${rec?'r':'p'}" onclick="toggleRec()">${rec?'■ Dừng & lưu ('+fmtNm(pathNm(rec.pts.map(p=>({lat:p[0],lon:p[1]}))))+')':'● Bắt đầu ghi vết'}</button></div>`;
+  h+=tracks.length?tracks.map(t=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${t.show!==false?'checked':''} onchange="togTrack('${t.id}',this.checked)"><div class="g" onclick="fitPts('${t.id}','t')"><b>${esc(t.name)}</b><small>${fmtNm(pathNm(t.pts.map(p=>({lat:p[0],lon:p[1]}))))} · ${t.pts.length} điểm</small></div><button class="b r" onclick="delTrack('${t.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có vết nào được lưu.</p>';
+  h+='<p class="note">Vết chỉ được ghi khi app đang mở trên màn hình (màn hình luôn sáng khi app chạy).</p>';
+  openPanel('Vết đi',h); }
+function togTrack(id,v){ const t=tracks.find(t=>t.id===id); if(t){ t.show=v; store.save('tracks',tracks); redraw(); } }
+function delTrack(id){ confirmBox('Xoá vết này?',()=>{ tracks=tracks.filter(t=>t.id!==id); store.save('tracks',tracks); redraw(); showTracks(); }); }
+
+/* ================= Báo động neo ================= */
+function setAnchor(){ if(!fix){ toast('Chưa có GPS'); return; } ask('Bán kính báo động neo (mét)','50',v=>{ const r=Math.max(10,parseFloat(v)||50); anchor={lat:fix.lat,lon:fix.lon,r}; store.save('anchor',anchor); closePanel(); redraw(); toast('Đã đặt báo động neo '+r+' m'); },'number'); }
+function clearAnchor(){ anchor=null; store.save('anchor',null); silence(); closePanel(); redraw(); }
+function checkAnchor(){ if(!anchor||!fix) return; const d=distNm(anchor,fix)*1852;
+  if(d>anchor.r){ if(!anchorAlarm){ anchorAlarm=true; if(NA) NA.alarm(true); }
+    $('banner').innerHTML=`⚠ TRÔI NEO! Cách điểm neo ${Math.round(d)} m <button class="b" style="float:right" onclick="clearAnchor()">Tắt</button>`; $('banner').style.display='block';
+  } else if(anchorAlarm) silence(); }
+function silence(){ anchorAlarm=false; if(NA) NA.alarm(false); $('banner').style.display='none'; }
+
+/* ================= Lớp hải đồ & MBTiles ================= */
+function refreshCharts(){ try{ charts = NA ? JSON.parse(NA.listCharts()) : []; }catch(e){ charts=[]; } redraw(); }
+window.onChartsChanged=function(newId){ refreshCharts(); if(newId){ set.charts[newId]=true; saveSet(); const c=charts.find(c=>c.id===newId); if(c&&c.bounds) fitBounds(c.bounds); } if($('panel').style.display==='flex') showLayers(); };
+window.onImportProgress=function(pct,name){ toast('Đang nạp '+name+'… '+pct+'%'); };
+window.onToast=toast;
+function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm?'checked':''} onchange="set.osm=this.checked;saveSet();redraw()">Bản đồ nền OpenStreetMap</label>
+  <label class="sw"><input type="checkbox" ${set.sea?'checked':''} onchange="set.sea=this.checked;saveSet();redraw()">Phao tiêu, đèn biển (OpenSeaMap)</label>
+  <label class="sw"><input type="checkbox" ${set.night?'checked':''} onchange="set.night=this.checked;saveSet();applyNight()">Chế độ ban đêm</label>
+  <p class="note">Hai lớp trên cần mạng lần đầu; các vùng đã xem được lưu lại để dùng khi ra khơi.</p>
+  <h3 style="margin:14px 0 4px">Hải đồ MBTiles của bạn</h3>`;
+  h+=charts.length?charts.map(c=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Mức '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div><button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa nạp tệp nào.</p>';
+  h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Nạp tệp .mbtiles</button></div><p class="note">Hỗ trợ MBTiles dạng ảnh (PNG, JPG, WebP). Tệp được chép vào bộ nhớ riêng của app; sau khi nạp xong có thể xoá tệp gốc.</p>`;
+  openPanel('Lớp hải đồ',h); }
+function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
+function zoomChart(id){ const c=charts.find(c=>c.id===id); if(c&&c.bounds){ closePanel(); fitBounds(c.bounds); if(S.zoom<c.minzoom) S.zoom=c.minzoom; redraw(); } }
+function delChart(id){ confirmBox('Xoá hải đồ này khỏi app?',()=>{ if(NA) NA.deleteChart(id); delete set.charts[id]; saveSet(); for(const k of [...tiles.keys()]) if(k.startsWith('m_'+id+'/')) tiles.delete(k); refreshCharts(); showLayers(); }); }
+function applyNight(){ document.body.classList.toggle('night',!!set.night); }
+
+/* ================= Thời tiết (Open-Meteo) ================= */
+const dir8 = d => ['B','ĐB','Đ','ĐN','N','TN','T','TB'][Math.round(d/45)%8];
+async function showWeather(p){ p=p||fix||s2ll(W/2,H/2);
+  openPanel('Thời tiết biển','<p>Đang tải dự báo cho '+fmtPos(p)+'…</p>');
+  try{ const q=`latitude=${p.lat.toFixed(3)}&longitude=${p.lon.toFixed(3)}&timezone=auto&forecast_days=3`;
+    const [a,b]=await Promise.all([
+      fetch(`https://api.open-meteo.com/v1/forecast?${q}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kn`).then(r=>r.json()),
+      fetch(`https://marine-api.open-meteo.com/v1/marine?${q}&hourly=wave_height,wave_direction,wave_period`).then(r=>r.json()).catch(()=>null) ]);
+    const H1=a.hourly, M=b&&b.hourly; const now=Date.now(); let rows='';
+    for(let i=0;i<H1.time.length;i+=3){ const t=new Date(H1.time[i]); if(t.getTime()<now-3*3600000) continue;
+      const wv=M&&M.wave_height[i]!=null;
+      rows+=`<tr><td>${String(t.getDate()).padStart(2,'0')}/${t.getMonth()+1} ${String(t.getHours()).padStart(2,'0')}h</td><td>${Math.round(H1.wind_speed_10m[i])} ${dir8(H1.wind_direction_10m[i])}</td><td>${Math.round(H1.wind_gusts_10m[i])}</td><td>${wv?M.wave_height[i].toFixed(1):'–'}</td><td>${wv?dir8(M.wave_direction[i]):'–'}</td><td>${wv&&M.wave_period[i]!=null?Math.round(M.wave_period[i]):'–'}</td></tr>`; }
+    openPanel('Thời tiết biển',`<p>${fmtPos(p)}</p><table class="w"><tr><th>Giờ</th><th>Gió (kn)</th><th>Giật</th><th>Sóng (m)</th><th>Hướng</th><th>Chu kỳ (s)</th></tr>${rows}</table><p class="note">Nguồn: Open-Meteo. Chỉ để tham khảo; hãy theo dõi bản tin dự báo chính thức và tin bão.</p>`);
+  }catch(e){ openPanel('Thời tiết biển','<p>Không tải được dự báo. Cần có kết nối mạng.</p>'); } }
+
+/* ================= AIS ================= */
+const aisFrag={};
+function sixbits(payload){ let s=''; for(let i=0;i<payload.length;i++){ let c=payload.charCodeAt(i)-48; if(c>40) c-=8; s+=(c&63).toString(2).padStart(6,'0'); } return s; }
+const ub=(b,s,n)=>parseInt(b.substr(s,n)||'0',2);
+const sb=(b,s,n)=>{ let v=ub(b,s,n); if(b[s]==='1') v-=Math.pow(2,n); return v; };
+function txt(b,s,n){ let o=''; for(let i=s;i+6<=s+n&&i+6<=b.length;i+=6){ const v=ub(b,i,6); o+=String.fromCharCode(v<32?v+64:v); } return o.replace(/@.*$/,'').trim(); }
+function decodeAis(line){ const m=/^!(?:AI|BS|AB)VD[MO],(\d),(\d),(\d?),([AB12]?),([^,]*),(\d)/.exec(line); if(!m) return null;
+  let payload=m[5]; const tot=+m[1], num=+m[2], key=m[3]+m[4];
+  if(tot>1){ if(num===1) aisFrag[key]={n:1,p:payload}; else { const f=aisFrag[key]; if(!f||f.n!==num-1){ delete aisFrag[key]; return null; } f.n=num; f.p+=payload; } if(num<tot) return null; payload=aisFrag[key].p; delete aisFrag[key]; }
+  const b=sixbits(payload), type=ub(b,0,6), mmsi=ub(b,8,30); const r={mmsi,type};
+  const pos=(lonS,sogS,cogS,hdgS)=>{ const lon=sb(b,lonS,28)/600000, lat=sb(b,lonS+28,27)/600000; if(Math.abs(lon)<=180&&Math.abs(lat)<=90){ r.lon=lon; r.lat=lat; }
+    const sog=ub(b,sogS,10); if(sog<1023) r.sog=sog/10; const cog=ub(b,cogS,12); if(cog<3600) r.cog=cog/10; const hdg=ub(b,hdgS,9); if(hdg<360) r.hdg=hdg; };
+  if(type>=1&&type<=3){ if(b.length<137) return null; pos(61,50,116,128); }
+  else if(type===18){ if(b.length<133) return null; pos(57,46,112,124); }
+  else if(type===19){ if(b.length<263) return null; pos(57,46,112,124); r.name=txt(b,143,120); }
+  else if(type===5){ if(b.length<232) return null; r.name=txt(b,112,120); }
+  else if(type===24){ if(ub(b,38,2)===0&&b.length>=160) r.name=txt(b,40,120); else return null; }
+  else return null;
+  return r; }
+window.onNmea=function(line){ const r=decodeAis(line.trim()); if(!r) return; const a=ais.get(r.mmsi)||{};
+  for(const k of ['lat','lon','sog','cog','hdg','name']) if(r[k]!=null&&r[k]!=='') a[k]=r[k]; a.t=Date.now(); ais.set(r.mmsi,a); redraw(); };
+window.onAisStatus=function(s){ aisStatus=s; const e=$('aisst'); if(e) e.textContent=s; };
+function showAis(){ openPanel('AIS – tàu xung quanh',`<p class="note">Kết nối tới bộ thu AIS có Wi‑Fi (dữ liệu NMEA 0183). Điện thoại phải vào cùng mạng Wi‑Fi với bộ thu.</p>
+  Địa chỉ IP bộ thu<input id="ah" type="text" value="${esc(set.ais.host)}">Cổng<input id="ap" type="number" value="${esc(set.ais.port)}">Giao thức<select id="at"><option value="tcp" ${set.ais.proto==='tcp'?'selected':''}>TCP</option><option value="udp" ${set.ais.proto==='udp'?'selected':''}>UDP (chỉ cần cổng)</option></select>
+  <div class="grid"><button class="b p" onclick="aisConnect()">Kết nối</button><button class="b r" onclick="NA&&NA.aisDisconnect()">Ngắt</button></div>
+  <p>Trạng thái: <b id="aisst">${esc(aisStatus)}</b> · ${ais.size} tàu</p>`); }
+function aisConnect(){ set.ais={host:$('ah').value.trim(),port:parseInt($('ap').value)||10110,proto:$('at').value}; saveSet(); if(NA) NA.aisConnect(set.ais.host,set.ais.port,set.ais.proto); else toast('Chỉ dùng được trong app Android'); }
+
+/* ================= GPX ================= */
+function buildGpx(){ const x=s=>esc(s); let o='<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="HaiDoMo" xmlns="http://www.topografix.com/GPX/1/1">\n';
+  for(const w of wpts) o+=`<wpt lat="${w.lat}" lon="${w.lon}"><name>${x(w.name)}</name></wpt>\n`;
+  for(const r of routes) o+=`<rte><name>${x(r.name)}</name>`+r.pts.map(p=>`<rtept lat="${p.lat}" lon="${p.lon}"/>`).join('')+'</rte>\n';
+  for(const t of tracks) o+=`<trk><name>${x(t.name)}</name><trkseg>`+t.pts.map(p=>`<trkpt lat="${p[0]}" lon="${p[1]}">${p[2]?'<time>'+new Date(p[2]).toISOString()+'</time>':''}</trkpt>`).join('')+'</trkseg></trk>\n';
+  return o+'</gpx>\n'; }
+function parseGpx(text){ const d=new DOMParser().parseFromString(text,'application/xml'); if(d.getElementsByTagName('parsererror').length) throw new Error('xml');
+  const nm=(e,def)=>{ for(const c of e.children) if(c.localName==='name') return c.textContent.trim()||def; return def; };
+  const ll=e=>({lat:parseFloat(e.getAttribute('lat')),lon:parseFloat(e.getAttribute('lon'))}); const ok=p=>isFinite(p.lat)&&isFinite(p.lon);
+  const out={w:[],r:[],t:[]}; const by=n=>[...d.getElementsByTagNameNS('*',n)];
+  by('wpt').forEach((e,i)=>{ const p=ll(e); if(ok(p)) out.w.push({id:uid(),name:nm(e,'Điểm '+(i+1)),lat:p.lat,lon:p.lon}); });
+  by('rte').forEach((e,i)=>{ const pts=[...e.getElementsByTagNameNS('*','rtept')].map(ll).filter(ok); if(pts.length>1) out.r.push({id:uid(),name:nm(e,'Tuyến '+(i+1)),pts}); });
+  by('trk').forEach((e,i)=>{ const pts=[...e.getElementsByTagNameNS('*','trkpt')].map(q=>{ const p=ll(q); const tm=q.getElementsByTagNameNS('*','time')[0]; return [p.lat,p.lon,tm?Date.parse(tm.textContent)||0:0]; }).filter(p=>isFinite(p[0])&&isFinite(p[1])); if(pts.length>1) out.t.push({id:uid(),name:nm(e,'Vết '+(i+1)),pts}); });
+  return out; }
+window.onGpxImported=function(text){ try{ const g=parseGpx(text); wpts.push(...g.w); routes.push(...g.r); tracks.push(...g.t);
+    store.save('wpts',wpts); store.save('routes',routes); store.save('tracks',tracks); redraw(); toast(`Đã nhập ${g.w.length} điểm, ${g.r.length} tuyến, ${g.t.length} vết`);
+  }catch(e){ toast('Tệp GPX không đọc được'); } };
+function exportGpx(){ const n='haido-'+new Date().toISOString().slice(0,10)+'.gpx'; if(NA) NA.exportGpx(n,buildGpx()); else toast('Chỉ dùng được trong app Android'); }
+
+/* ================= Menu ================= */
+function showMenu(){ openPanel('Chức năng',`<div class="grid">
+  <button class="b" onclick="showWpts()">📍 Điểm đánh dấu</button><button class="b" onclick="showRoutes()">〰 Tuyến đường</button>
+  <button class="b" onclick="showTracks()">👣 Vết đi${rec?' (đang ghi)':''}</button><button class="b" onclick="startMode('measure')">📏 Đo khoảng cách</button>
+  <button class="b" onclick="${anchor?'clearAnchor()':'setAnchor()'}">⚓ ${anchor?'Huỷ báo động neo':'Báo động neo'}</button><button class="b" onclick="showWeather()">🌬 Thời tiết biển</button>
+  <button class="b" onclick="showAis()">📡 AIS</button><button class="b" onclick="showLayers()">▤ Lớp hải đồ</button>
+  <button class="b" onclick="NA?NA.importGpx():toast('Chỉ dùng được trong app Android')">⬇ Nhập GPX</button><button class="b" onclick="exportGpx()">⬆ Xuất GPX</button></div>
+  <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem thời tiết tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
+
+/* ================= Khởi động ================= */
+applyNight(); updFollow(); refreshCharts(); resize();
+if(anchor) redraw();
+if(!NA && navigator.geolocation) navigator.geolocation.watchPosition(p=>window.onGps(p.coords.latitude,p.coords.longitude,p.coords.speed==null?-1:p.coords.speed,p.coords.heading==null?-1:p.coords.heading,p.coords.accuracy,p.timestamp),()=>{}, {enableHighAccuracy:true});
+if(NA) NA.ready();
+</script>
+</body>
+</html>
