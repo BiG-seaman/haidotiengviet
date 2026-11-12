@@ -109,7 +109,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.4';
+const APP_VER='1.5';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -150,25 +150,53 @@ let dirty=true; const redraw = () => { if(!dirty){ dirty=true; requestAnimationF
 function resize(){ DPR=window.devicePixelRatio||1; W=cv.clientWidth; H=cv.clientHeight; cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR); dirty=false; redraw(); }
 window.addEventListener('resize', resize);
 
-/* --- Bộ nạp ô bản đồ: giới hạn số ô tải cùng lúc, ưu tiên ô giữa màn hình, bỏ ô không còn cần --- */
-const tiles = new Map(); const MAXT = 900, MAXC = 10;
-let want = new Map(), inflight = 0;
+/* --- Bộ nạp ô bản đồ: dùng theo sức máy, ưu tiên ô đang nhìn, tải trước ô xung quanh và các mức thu nhỏ --- */
+const HW={cores:navigator.hardwareConcurrency||4, mem:navigator.deviceMemory||4};
+function perf(){ const m=set.perf||'max', f=m==='max'?0.75:(m==='bal'?0.5:0.25);
+  return { mode:m, maxc:Math.max(6,Math.min(32,Math.round(HW.cores*f*3))),          // số ô tải cùng lúc
+           maxt:Math.max(400,Math.min(2400,Math.round(HW.mem*f*250))),             // số ô giữ sẵn trong bộ nhớ (~0,25 MB/ô)
+           out:m==='max'?4:(m==='bal'?2:0), ring:m==='max'?2:(m==='bal'?1:0), zin:m!=='eco' }; }
+let P=perf();
+const tiles=new Map(); let want=new Map(), pref=new Map(), inflight=0;
+const useBmp=typeof createImageBitmap==='function'&&!!NA;   // giải mã ảnh ngoài luồng chính, giữ sẵn dạng bitmap
 function getTile(L,z,x,y,pri){
   const key=L.id+'/'+z+'/'+x+'/'+y; const t=tiles.get(key);
   if(t){ tiles.delete(key); tiles.set(key,t);                       // đánh dấu vừa dùng
     if(t.ok) return t.img; if(t.loading) return null; if(t.fail&&Date.now()-t.fail<30000) return null; }
-  const w=want.get(key); if(!w||pri<w.pri) want.set(key,{L,z,x,y,pri});
+  const w=want.get(key); if(!w||pri<w.pri) want.set(key,{L,z,x,y,pri,vis:true});
   return null; }
 function peekTile(L,z,x,y){ const t=tiles.get(L.id+'/'+z+'/'+x+'/'+y); return t&&t.ok ? t.img : null; }
-function pumpTiles(){ if(inflight>=MAXC||!want.size) return;
-  const list=[...want.entries()].sort((a,b)=>a[1].pri-b[1].pri);
-  for(const [key,w] of list){ if(inflight>=MAXC) break; const t=tiles.get(key); if(t&&(t.ok||t.loading)) continue; startTile(key,w); } }
-function startTile(key,w){ const img=new Image(); img.decoding='async'; const t={img,ok:false,fail:0,loading:true};
-  tiles.set(key,t); want.delete(key); inflight++;
-  img.onload=()=>{ t.ok=true; t.loading=false; inflight--; redraw(); pumpTiles(); };
-  img.onerror=()=>{ t.fail=Date.now(); t.loading=false; inflight--; pumpTiles(); };
-  img.src=w.L.url(w.z,w.x,w.y);
-  if(tiles.size>MAXT){ for(const [k,v] of tiles){ if(tiles.size<=MAXT) break; if(!v.loading) tiles.delete(k); } } }
+function queuePre(L,z,x,y,pri){ const key=L.id+'/'+z+'/'+x+'/'+y; const t=tiles.get(key);
+  if(t&&(t.ok||t.loading||(t.fail&&Date.now()-t.fail<30000))) return; const w=pref.get(key); if(!w||pri<w.pri) pref.set(key,{L,z,x,y,pri}); }
+function pumpTiles(){
+  for(const map of [want,pref]){ if(inflight>=P.maxc) return; if(!map.size) continue;
+    const list=[...map.entries()].sort((a,b)=>a[1].pri-b[1].pri);
+    for(const [key,w] of list){ if(inflight>=P.maxc) return; const t=tiles.get(key); if(t&&(t.ok||t.loading)){ map.delete(key); continue; } startTile(key,w,map); } } }
+function startTile(key,w,map){ const t={img:null,ok:false,fail:0,loading:true}; tiles.set(key,t); map.delete(key); inflight++;
+  const done=img=>{ t.loading=false; inflight--; if(img){ t.img=img; t.ok=true; if(w.vis) redraw(); } else t.fail=Date.now(); pumpTiles(); };
+  const url=w.L.url(w.z,w.x,w.y);
+  if(useBmp) fetch(url).then(r=>{ if(!r.ok) throw 0; return r.blob(); }).then(b=>createImageBitmap(b)).then(done,()=>done(null));
+  else { const img=new Image(); img.decoding='async'; img.onload=()=>done(img); img.onerror=()=>done(null); img.src=url; }
+  if(tiles.size>P.maxt){ for(const [k,v] of tiles){ if(tiles.size<=P.maxt) break; if(v.loading) continue; if(v.img&&v.img.close) v.img.close(); tiles.delete(k); } } }
+// tải trước khi bản đồ đứng yên: vòng ô quanh màn hình, các mức thu nhỏ (để zoom ra không trễ), mức phóng to kế tiếp ở giữa
+let lastView='', preT=0;
+function viewChanged(){ const v=S.cx.toFixed(6)+','+S.cy.toFixed(6)+','+S.zoom.toFixed(2); if(v===lastView) return; lastView=v; pref.clear(); clearTimeout(preT); preT=setTimeout(prefetch,200); }
+function prefetch(){ if(!P.out&&!P.ring) return;
+  const layers=activeLayers(); const z0=Math.round(S.zoom);
+  layers.forEach((L,li)=>{ if(!L.id.startsWith('m_')) return;            // chỉ tải trước hải đồ MBTiles trong máy, không tải hàng loạt từ máy chủ bản đồ trực tuyến
+    const plan=[[0,P.ring,1000]]; for(let d=1;d<=P.out;d++) plan.push([-d,1,2000+d*1000]); if(P.zin) plan.push([1,0,6000]);
+    for(const [dz,margin,base] of plan){ const tz=pickZ(L,z0+dz); if(tz<0) continue;
+      const n=1<<tz, sc=dz<0?256:Math.pow(2,S.zoom-tz)*256, x0=S.cx*n-W/2/sc, y0=S.cy*n-H/2/sc;   // mức thu nhỏ: phủ cả khung nhìn khi đã thu nhỏ tới mức đó
+      let tx0=Math.floor(x0)-margin, tx1=Math.floor(x0+W/sc)+margin, ty0=Math.max(0,Math.floor(y0)-margin), ty1=Math.min(n-1,Math.floor(y0+H/sc)+margin);
+      if(dz>0){ const cx=Math.floor(x0+W/2/sc), cy=Math.floor(y0+H/2/sc); tx0=cx-1; tx1=cx+1; ty0=Math.max(0,cy-1); ty1=Math.min(n-1,cy+1); }
+      const ext=L.zooms&&L.zooms[tz]; let bx0=-1e9,bx1=1e9,by0=-1e9,by1=1e9;
+      if(ext){ bx0=ext[0]; bx1=ext[1]; by0=ext[2]; by1=ext[3]; }
+      else if(L.bounds){ bx0=Math.floor(lon2x(L.bounds[0])*n); bx1=Math.floor(lon2x(L.bounds[2])*n); by0=Math.floor(lat2y(L.bounds[3])*n); by1=Math.floor(lat2y(L.bounds[1])*n); }
+      const cxT=x0+W/2/sc, cyT=y0+H/2/sc;
+      for(let ty=ty0;ty<=ty1;ty++) for(let tx=tx0;tx<=tx1;tx++){ const wx=((tx%n)+n)%n; if(wx<bx0||wx>bx1||ty<by0||ty>by1) continue;
+        queuePre(L,tz,wx,ty,base+Math.hypot(tx+0.5-cxT,ty+0.5-cyT)+li*0.3); } } });
+  pumpTiles(); }
+function setPerf(m){ set.perf=m; saveSet(); P=perf(); lastView=''; redraw(); showLayers(); }
 
 /* Thứ tự lớp MBTiles: tệp ít chi tiết (zoom thấp) nằm dưới, tệp chi tiết nằm trên; người dùng có thể đổi */
 function orderedCharts(){ const ord=set.chartOrder||[];
@@ -178,11 +206,13 @@ function moveChart(id,d){ const ids=orderedCharts().map(c=>c.id); const i=ids.in
   [ids[i],ids[j]]=[ids[j],ids[i]]; set.chartOrder=ids; saveSet(); redraw(); showLayers(); }
 function autoOrder(){ delete set.chartOrder; saveSet(); redraw(); showLayers(); }
 
+// chia ô ra 4 địa chỉ nội bộ để vượt giới hạn 6 kết nối/địa chỉ của trình duyệt
+const shard=(x,y)=>NA?`https://m${(x+y)&3}.haido.local`:'';
 function activeLayers(){
   const a=[];
   if(set.osm) a.push({id:'osm',min:0,max:19,url:(z,x,y)=> NA ? `/t/osm/${z}/${x}/${y}` : `https://tile.openstreetmap.org/${z}/${x}/${y}.png`});
   for(const c of orderedCharts()) if(set.charts[c.id]!==false && c.format!=='pbf')      // hải đồ MBTiles nằm dưới lớp phao tiêu
-    a.push({id:'m_'+c.id,min:c.minzoom,max:c.maxzoom,bounds:c.bounds,zooms:c.zooms,over:true,url:(z,x,y)=>`/m/${encodeURIComponent(c.id)}/${z}/${x}/${y}`});
+    a.push({id:'m_'+c.id,min:c.minzoom,max:c.maxzoom,bounds:c.bounds,zooms:c.zooms,over:true,url:(z,x,y)=>`${shard(x,y)}/m/${encodeURIComponent(c.id)}/${z}/${x}/${y}`});
   if(set.sea) a.push({id:'sea',min:9,max:18,nofallback:true,url:(z,x,y)=> NA ? `/t/sea/${z}/${x}/${y}` : `https://tiles.openseamap.org/seamark/${z}/${x}/${y}.png`});
   return a;
 }
@@ -291,7 +321,7 @@ function draw(){
     if(head!=null){ ctx.save(); ctx.translate(x,y); ctx.rotate(head*D2R); ctx.beginPath(); ctx.moveTo(0,-17); ctx.lineTo(10,12); ctx.lineTo(0,6); ctx.lineTo(-10,12); ctx.closePath();
       ctx.fillStyle=stale?'#78909c':'#1565c0'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); ctx.restore(); }
     else dot(x,y,9,stale?'#78909c':'#1565c0','#fff'); }
-  drawScale(); pumpTiles();
+  drawScale(); pumpTiles(); viewChanged();
   set.view={lat:y2lat(S.cy),lon:x2lon(S.cx),zoom:S.zoom};
 }
 function drawScale(){ const lat=y2lat(S.cy), nmpp=40075016.686*Math.cos(lat*D2R)/scale()/1852;
@@ -588,6 +618,11 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
   <label class="sw"><input type="checkbox" ${set.night?'checked':''} onchange="set.night=this.checked;saveSet();applyNight()">Chế độ ban đêm</label>
   <div class="cl" style="margin-top:10px">Hiển thị toạ độ</div><select onchange="set.fmt=this.value;saveSet();if(fix)$('pos').textContent=fmtPos(fix)"><option value="dms" ${set.fmt!=='dm'?'selected':''}>Độ° phút' giây" (10°21'30.0"N)</option><option value="dm" ${set.fmt==='dm'?'selected':''}>Độ° phút' thập phân (10°21.500'N)</option></select>
   <p class="note">Hai lớp trên cần mạng lần đầu; các vùng đã xem được lưu lại để dùng khi ra khơi.</p>
+  <div class="cl" style="margin-top:10px">Hiệu năng tải bản đồ</div><select onchange="setPerf(this.value)">
+   <option value="max" ${P.mode==='max'?'selected':''}>Tối đa – dùng khoảng 75% phần cứng, tải trước nhiều nhất</option>
+   <option value="bal" ${P.mode==='bal'?'selected':''}>Cân bằng</option>
+   <option value="eco" ${P.mode==='eco'?'selected':''}>Tiết kiệm pin</option></select>
+  <p class="note">Máy: ${HW.cores} nhân CPU, ~${HW.mem} GB RAM → tải ${P.maxc} ô cùng lúc, giữ sẵn ${P.maxt} ô (~${Math.round(P.maxt/4)} MB)${P.out?', tải trước '+P.out+' mức thu nhỏ':''}. Mức Tối đa làm máy ấm và tốn pin hơn.</p>
   <h3 style="margin:14px 0 4px">Hải đồ MBTiles của bạn</h3>`;
   const oc=orderedCharts().reverse();   // hiển thị lớp trên cùng trước
   h+=oc.length?oc.map((c,i)=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Zoom '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div>`+
@@ -598,7 +633,7 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
   openPanel('Lớp hải đồ',h); }
 function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
 function zoomChart(id){ const c=charts.find(c=>c.id===id); if(c&&c.bounds){ closePanel(); fitBounds(c.bounds); if(S.zoom<c.minzoom) S.zoom=c.minzoom; redraw(); } }
-function delChart(id){ confirmBox('Xoá hải đồ này khỏi app?',()=>{ if(NA) NA.deleteChart(id); delete set.charts[id]; saveSet(); for(const k of [...tiles.keys()]) if(k.startsWith('m_'+id+'/')) tiles.delete(k); refreshCharts(); showLayers(); }); }
+function delChart(id){ confirmBox('Xoá hải đồ này khỏi app?',()=>{ if(NA) NA.deleteChart(id); delete set.charts[id]; saveSet(); for(const [k,v] of [...tiles]) if(k.startsWith('m_'+id+'/')){ if(v.img&&v.img.close) v.img.close(); tiles.delete(k); } refreshCharts(); showLayers(); }); }
 function applyNight(){ document.body.classList.toggle('night',!!set.night); }
 
 /* ================= Thời tiết (Open-Meteo) ================= */
