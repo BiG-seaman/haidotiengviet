@@ -1,0 +1,28 @@
+name: Tao lop do sau GEBCO (MBTiles)
+on:
+  workflow_dispatch:
+    inputs:
+      bbox:
+        description: 'Vùng: tây,nam,đông,bắc (độ)'
+        default: '99,0,122.5,24'
+      maxzoom:
+        description: 'Mức phóng to lớn nhất (9 đến 12)'
+        default: '11'
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy scipy pillow tifffile h5py
+      - name: Tải GEBCO 2026 và tạo MBTiles
+        run: python tools/make_depth_mbtiles.py --source gebco --bbox "${{ inputs.bbox }}" --minzoom 4 --maxzoom ${{ inputs.maxzoom }} --work /tmp/gebco --out GEBCO2026_BienDong_VinhThaiLan.mbtiles
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GEBCO2026-BienDong-VinhThaiLan
+          path: GEBCO2026_BienDong_VinhThaiLan.mbtiles
+          compression-level: 0
+          retention-days: 30
