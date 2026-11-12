@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Tạo hải đồ độ sâu dạng MBTiles từ dữ liệu ETOPO 2022 (NOAA NCEI, 15 giây cung).
+Tạo hải đồ độ sâu dạng MBTiles từ GEBCO_2026 (mặc định) hoặc ETOPO 2022, độ phân giải 15 giây cung.
 
-- Nguồn: ETOPO 2022 15 Arc-Second Global Relief Model, NOAA NCEI, doi:10.25921/fd45-gt74
-  (dữ liệu công cộng của chính phủ Mỹ, phần đáy biển chủ yếu lấy từ GEBCO).
+- GEBCO_2026 Grid, GEBCO Compilation Group (2026), doi:10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa
+  (dữ liệu công cộng, được dùng cả cho mục đích thương mại, cần ghi nguồn).
+- ETOPO 2022 15 Arc-Second Global Relief Model, NOAA NCEI, doi:10.25921/fd45-gt74 (dự phòng).
 - Kết quả: vùng nước tô màu theo dải độ sâu, đường đẳng sâu và số độ sâu tham khảo;
   đất liền tô màu nền đất để dùng được khi không có mạng.
 
@@ -11,7 +12,8 @@ Cách dùng:
   python make_depth_mbtiles.py --bbox 99,0,122.5,24 --minzoom 4 --maxzoom 10 --out ra.mbtiles
   python make_depth_mbtiles.py --nc tep1.nc tep2.nc ...   (dùng tệp NetCDF đã có sẵn)
 """
-import argparse, io, math, os, sqlite3, sys, time, urllib.request
+import argparse, io, math, os, sqlite3, sys, time, urllib.request, warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
@@ -19,6 +21,7 @@ from scipy.io import netcdf_file
 
 ERDDAP = "https://coastwatch.pfeg.noaa.gov/erddap/griddap/ETOPO_2022_v1_15s.nc?z[({s}):({n})][({w}):({e})]"
 THREDDS = "https://www.ngdc.noaa.gov/thredds/fileServer/global/ETOPO2022/15s/15s_surface_elev_netcdf/ETOPO_2022_v1_15s_{tile}_surface.nc"
+GEBCO_ZIP = os.environ.get("GEBCO_URL") or "https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2026/ice_surface_elevation/geotiff/gebco_2026_geotiff.zip?download=1"
 UA = {"User-Agent": "HaiDoMo-depth-tiles/1.0 (offline nautical app; contact via GitHub)"}
 
 # ---------------- Bảng màu (giống hải đồ: nước nông đậm, nước sâu nhạt) ----------------
@@ -150,6 +153,106 @@ def download(bbox, workdir):
     return parts
 
 
+# ---------------- GEBCO: chỉ lấy ô GeoTIFF 90x90 độ cần dùng trong tệp zip lớn ----------------
+class HttpFile(io.RawIOBase):
+    """Tệp trên mạng đọc theo đoạn (HTTP Range) để zipfile chỉ tải phần cần thiết."""
+    def __init__(self, url):
+        self.url, self.pos = url, 0
+        req = urllib.request.Request(url, headers={**UA, "Range": "bytes=0-0"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            cr = r.headers.get("Content-Range")
+            if r.status != 206 or not cr:
+                raise IOError("máy chủ không hỗ trợ tải từng đoạn")
+            self.size = int(cr.split("/")[-1])
+            self.url = r.geturl()
+        self.nreq = 0
+    def readable(self): return True
+    def seekable(self): return True
+    def tell(self): return self.pos
+    def seek(self, off, whence=0):
+        self.pos = off if whence == 0 else (self.pos + off if whence == 1 else self.size + off)
+        return self.pos
+    def readinto(self, b):
+        if self.pos >= self.size:
+            return 0
+        end = min(self.size, self.pos + len(b)) - 1
+        for k in range(6):
+            try:
+                req = urllib.request.Request(self.url, headers={**UA, "Range": f"bytes={self.pos}-{end}"})
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    data = r.read()
+                break
+            except Exception as e:
+                print("  lỗi đoạn, thử lại:", e, flush=True); time.sleep(10 * (k + 1))
+        else:
+            raise IOError("không tải được đoạn dữ liệu")
+        n = len(data); b[:n] = data; self.pos += n; self.nreq += 1
+        return n
+
+
+def tile_bounds(name):
+    import re
+    m = re.search(r"n(-?\d+(?:\.\d+)?)_s(-?\d+(?:\.\d+)?)_w(-?\d+(?:\.\d+)?)_e(-?\d+(?:\.\d+)?)", name)
+    return tuple(float(v) for v in m.groups()) if m else None   # n, s, w, e
+
+
+def download_gebco(bbox, workdir):
+    import zipfile, shutil
+    w, s, e, n = bbox
+    os.makedirs(workdir, exist_ok=True)
+    try:
+        src = io.BufferedReader(HttpFile(GEBCO_ZIP), buffer_size=8 << 20)
+        print("Máy chủ GEBCO cho tải từng đoạn: chỉ tải ô cần dùng", flush=True)
+    except Exception as ex:
+        print("Không tải từng đoạn được (", ex, ") - tải cả tệp zip ~4 GB", flush=True)
+        zpath = os.path.join(workdir, "gebco_2026_geotiff.zip")
+        if not os.path.exists(zpath) and not fetch(GEBCO_ZIP, zpath):
+            raise IOError("không tải được GEBCO")
+        src = open(zpath, "rb")
+    parts = []
+    with zipfile.ZipFile(src) as zf:
+        for info in zf.infolist():
+            tb = tile_bounds(info.filename)
+            if not tb or not info.filename.lower().endswith((".tif", ".tiff")):
+                continue
+            tn, ts, tw, te = tb
+            if tw >= e or te <= w or ts >= n or tn <= s:
+                continue
+            dest = os.path.join(workdir, os.path.basename(info.filename))
+            if not os.path.exists(dest):
+                print(f"  giải nén {info.filename} ({info.compress_size >> 20} MB nén)", flush=True)
+                t0 = time.time()
+                with zf.open(info) as fi, open(dest + ".part", "wb") as fo:
+                    shutil.copyfileobj(fi, fo, 8 << 20)
+                os.replace(dest + ".part", dest)
+                print(f"  xong sau {time.time()-t0:.0f}s", flush=True)
+            parts.append(read_geotiff_window(dest, (tn, ts, tw, te), bbox))
+    if not parts:
+        raise IOError("không tìm thấy ô GEBCO phủ vùng yêu cầu")
+    return parts
+
+
+def read_geotiff_window(path, tb, bbox):
+    import tifffile
+    tn, ts, tw, te = tb
+    w, s, e, n = bbox
+    with tifffile.TiffFile(path) as tf:
+        page = tf.pages[0]
+        H, Wd = page.shape[:2]
+        step_y, step_x = (tn - ts) / H, (te - tw) / Wd
+        try:
+            arr = tf.asarray(out="memmap")
+        except Exception:
+            arr = page.asarray()
+    r0 = max(0, int(math.floor((tn - min(n, tn)) / step_y)) - 2); r1 = min(H, int(math.ceil((tn - max(s, ts)) / step_y)) + 2)
+    c0 = max(0, int(math.floor((max(w, tw) - tw) / step_x)) - 2); c1 = min(Wd, int(math.ceil((min(e, te) - tw) / step_x)) + 2)
+    z = np.array(arr[r0:r1, c0:c1], dtype=np.float32)
+    lat = tn - (np.arange(r0, r1) + 0.5) * step_y
+    lon = tw + (np.arange(c0, c1) + 0.5) * step_x
+    print(f"  đọc {os.path.basename(path)}: {z.shape[1]}x{z.shape[0]} điểm", flush=True)
+    return lat, lon, z
+
+
 # ---------------- Ô bản đồ ----------------
 def lon2tx(lon, z): return (lon + 180.0) / 360.0 * (1 << z)
 def lat2ty(lat, z):
@@ -255,6 +358,11 @@ def render(elev, z, pal):
     return out.getvalue()
 
 
+NAME = "Độ sâu GEBCO 2026 – Biển Đông & Vịnh Thái Lan"
+DESC = "Độ sâu tham khảo từ GEBCO_2026 Grid (15 arc-second). Không dùng thay hải đồ chính thức."
+ATTR = "GEBCO Compilation Group (2026) GEBCO 2026 Grid (doi:10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa)"
+
+
 def build(lats, lons, grid, bbox, zmin, zmax, out):
     w, s, e, n = bbox
     pyr = Pyramid(lats, lons, grid)
@@ -266,11 +374,10 @@ def build(lats, lons, grid, bbox, zmin, zmax, out):
         CREATE TABLE metadata (name TEXT, value TEXT);
         CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB);
         CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row);""")
-    meta = {"name": "Độ sâu Biển Đông & Vịnh Thái Lan", "format": "png", "type": "baselayer", "version": "1",
+    meta = {"name": NAME, "format": "png", "type": "baselayer", "version": "1",
             "minzoom": str(zmin), "maxzoom": str(zmax), "bounds": f"{w},{s},{e},{n}",
             "center": f"{(w+e)/2},{(s+n)/2},{zmin+2}",
-            "description": "Độ sâu tham khảo từ ETOPO 2022 15 arc-second (NOAA NCEI). Không dùng thay hải đồ chính thức.",
-            "attribution": "ETOPO 2022, NOAA NCEI (doi:10.25921/fd45-gt74)"}
+            "description": DESC, "attribution": ATTR}
     db.executemany("INSERT INTO metadata VALUES (?,?)", meta.items())
     total = 0; nbytes = 0
     for z in range(zmin, zmax + 1):
@@ -304,9 +411,30 @@ def main():
     ap.add_argument("--out", default="dosau.mbtiles")
     ap.add_argument("--work", default="etopo_data")
     ap.add_argument("--nc", nargs="*", help="dùng tệp NetCDF có sẵn thay vì tải")
+    ap.add_argument("--tif", nargs="*", help="dùng ô GeoTIFF GEBCO có sẵn (tên tệp chứa n.._s.._w.._e..)")
+    ap.add_argument("--source", choices=["gebco", "etopo"], default="gebco")
     a = ap.parse_args()
     bbox = [float(v) for v in a.bbox.split(",")]
-    parts = [read_any(p) for p in a.nc] if a.nc else download(bbox, a.work)
+    global NAME, DESC, ATTR
+    if a.source == "etopo" and not a.tif:
+        NAME = "Độ sâu ETOPO 2022 – Biển Đông & Vịnh Thái Lan"
+        DESC = "Độ sâu tham khảo từ ETOPO 2022 15 arc-second (NOAA NCEI). Không dùng thay hải đồ chính thức."
+        ATTR = "ETOPO 2022, NOAA NCEI (doi:10.25921/fd45-gt74)"
+    if a.tif:
+        parts = [read_geotiff_window(p, tile_bounds(os.path.basename(p)), bbox) for p in a.tif]
+    elif a.nc:
+        parts = [read_any(p) for p in a.nc]
+    elif a.source == "gebco":
+        try:
+            parts = download_gebco(bbox, a.work)
+        except Exception as ex:
+            print("GEBCO lỗi:", ex, "- chuyển sang ETOPO 2022", flush=True)
+            NAME, DESC, ATTR = (NAME.replace("GEBCO 2026", "ETOPO 2022"),
+                                "Độ sâu tham khảo từ ETOPO 2022 15 arc-second (NOAA NCEI). Không dùng thay hải đồ chính thức.",
+                                "ETOPO 2022, NOAA NCEI (doi:10.25921/fd45-gt74)")
+            parts = download(bbox, a.work)
+    else:
+        parts = download(bbox, a.work)
     lats, lons, grid = assemble(parts, bbox)
     build(lats, lons, grid, bbox, a.minzoom, a.maxzoom, a.out)
 
