@@ -109,7 +109,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.3';
+const APP_VER='1.4';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -150,45 +150,76 @@ let dirty=true; const redraw = () => { if(!dirty){ dirty=true; requestAnimationF
 function resize(){ DPR=window.devicePixelRatio||1; W=cv.clientWidth; H=cv.clientHeight; cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR); dirty=false; redraw(); }
 window.addEventListener('resize', resize);
 
-const tiles = new Map(); const MAXT = 500;
-function getTile(L,z,x,y){
-  const key=L.id+'/'+z+'/'+x+'/'+y; let t=tiles.get(key);
-  if(t){ tiles.delete(key); tiles.set(key,t); if(t.fail && Date.now()-t.fail>30000){ tiles.delete(key); t=null; } }
-  if(!t){ const img=new Image(); t={img,ok:false,fail:0};
-    img.onload=()=>{ t.ok=true; redraw(); }; img.onerror=()=>{ t.fail=Date.now(); };
-    img.src=L.url(z,x,y); tiles.set(key,t);
-    if(tiles.size>MAXT){ const k=tiles.keys().next().value; tiles.delete(k); } }
-  return t.ok ? t.img : null;
-}
+/* --- Bộ nạp ô bản đồ: giới hạn số ô tải cùng lúc, ưu tiên ô giữa màn hình, bỏ ô không còn cần --- */
+const tiles = new Map(); const MAXT = 900, MAXC = 10;
+let want = new Map(), inflight = 0;
+function getTile(L,z,x,y,pri){
+  const key=L.id+'/'+z+'/'+x+'/'+y; const t=tiles.get(key);
+  if(t){ tiles.delete(key); tiles.set(key,t);                       // đánh dấu vừa dùng
+    if(t.ok) return t.img; if(t.loading) return null; if(t.fail&&Date.now()-t.fail<30000) return null; }
+  const w=want.get(key); if(!w||pri<w.pri) want.set(key,{L,z,x,y,pri});
+  return null; }
 function peekTile(L,z,x,y){ const t=tiles.get(L.id+'/'+z+'/'+x+'/'+y); return t&&t.ok ? t.img : null; }
+function pumpTiles(){ if(inflight>=MAXC||!want.size) return;
+  const list=[...want.entries()].sort((a,b)=>a[1].pri-b[1].pri);
+  for(const [key,w] of list){ if(inflight>=MAXC) break; const t=tiles.get(key); if(t&&(t.ok||t.loading)) continue; startTile(key,w); } }
+function startTile(key,w){ const img=new Image(); img.decoding='async'; const t={img,ok:false,fail:0,loading:true};
+  tiles.set(key,t); want.delete(key); inflight++;
+  img.onload=()=>{ t.ok=true; t.loading=false; inflight--; redraw(); pumpTiles(); };
+  img.onerror=()=>{ t.fail=Date.now(); t.loading=false; inflight--; pumpTiles(); };
+  img.src=w.L.url(w.z,w.x,w.y);
+  if(tiles.size>MAXT){ for(const [k,v] of tiles){ if(tiles.size<=MAXT) break; if(!v.loading) tiles.delete(k); } } }
+
+/* Thứ tự lớp MBTiles: tệp ít chi tiết (zoom thấp) nằm dưới, tệp chi tiết nằm trên; người dùng có thể đổi */
+function orderedCharts(){ const ord=set.chartOrder||[];
+  const k=c=>{ const i=ord.indexOf(c.id); return i>=0?i:1000+c.maxzoom*30+c.minzoom; };
+  return charts.slice().sort((a,b)=>k(a)-k(b)); }
+function moveChart(id,d){ const ids=orderedCharts().map(c=>c.id); const i=ids.indexOf(id), j=i+d; if(i<0||j<0||j>=ids.length) return;
+  [ids[i],ids[j]]=[ids[j],ids[i]]; set.chartOrder=ids; saveSet(); redraw(); showLayers(); }
+function autoOrder(){ delete set.chartOrder; saveSet(); redraw(); showLayers(); }
+
 function activeLayers(){
   const a=[];
   if(set.osm) a.push({id:'osm',min:0,max:19,url:(z,x,y)=> NA ? `/t/osm/${z}/${x}/${y}` : `https://tile.openstreetmap.org/${z}/${x}/${y}.png`});
-  for(const c of charts) if(set.charts[c.id]!==false && c.format!=='pbf')      // hải đồ MBTiles nằm dưới lớp phao tiêu
-    a.push({id:'m_'+c.id,min:c.minzoom,max:c.maxzoom,bounds:c.bounds,over:true,url:(z,x,y)=>`/m/${encodeURIComponent(c.id)}/${z}/${x}/${y}`});
+  for(const c of orderedCharts()) if(set.charts[c.id]!==false && c.format!=='pbf')      // hải đồ MBTiles nằm dưới lớp phao tiêu
+    a.push({id:'m_'+c.id,min:c.minzoom,max:c.maxzoom,bounds:c.bounds,zooms:c.zooms,over:true,url:(z,x,y)=>`/m/${encodeURIComponent(c.id)}/${z}/${x}/${y}`});
   if(set.sea) a.push({id:'sea',min:9,max:18,nofallback:true,url:(z,x,y)=> NA ? `/t/sea/${z}/${x}/${y}` : `https://tiles.openseamap.org/seamark/${z}/${x}/${y}.png`});
   return a;
 }
-function drawLayer(L){
-  let tz=Math.round(S.zoom);
-  if(tz>L.max){ if(!L.over && tz>L.max+2) return; if(L.over && tz>L.max+4) return; tz=L.max; }
-  if(tz<L.min) return;
+// chọn mức ô sẽ dùng cho lớp ở mức zoom hiện tại (cho phép phóng to quá mức tệp 4 bậc, thu nhỏ 1 bậc)
+function pickZ(L,tz){
+  if(L.zooms){ const zs=Object.keys(L.zooms).map(Number).sort((a,b)=>a-b); if(!zs.length) return -1;
+    if(L.zooms[tz]) return tz;
+    let lo=-1; for(const z of zs) if(z<=tz) lo=z; if(lo>=0&&tz-lo<=4) return lo;
+    for(const z of zs) if(z>tz) return z-tz<=1?z:-1; return -1; }
+  if(tz>L.max){ if(tz>L.max+(L.over?4:2)) return -1; return L.max; }
+  if(tz<L.min) return (L.over&&tz>=L.min-1)?L.min:-1;
+  return tz; }
+function drawLayer(L,li){
+  const tz=pickZ(L,Math.round(S.zoom)); if(tz<0) return;
   const n=1<<tz, sc=Math.pow(2,S.zoom-tz)*256;      // px màn hình cho mỗi ô
   const x0=S.cx*n-W/2/sc, y0=S.cy*n-H/2/sc;         // toạ độ ô ở góc trái trên
   const tx0=Math.floor(x0), tx1=Math.floor(x0+W/sc), ty0=Math.max(0,Math.floor(y0)), ty1=Math.min(n-1,Math.floor(y0+H/sc));
   let bx0=-1e9,bx1=1e9,by0=-1e9,by1=1e9;
-  if(L.bounds){ bx0=Math.floor(lon2x(L.bounds[0])*n); bx1=Math.floor(lon2x(L.bounds[2])*n); by0=Math.floor(lat2y(L.bounds[3])*n); by1=Math.floor(lat2y(L.bounds[1])*n); }
+  const ext=L.zooms&&L.zooms[tz];
+  if(ext){ bx0=ext[0]; bx1=ext[1]; by0=ext[2]; by1=ext[3]; }
+  else if(L.bounds){ bx0=Math.floor(lon2x(L.bounds[0])*n); bx1=Math.floor(lon2x(L.bounds[2])*n); by0=Math.floor(lat2y(L.bounds[3])*n); by1=Math.floor(lat2y(L.bounds[1])*n); }
+  const cxT=x0+W/2/sc, cyT=y0+H/2/sc;
   for(let ty=ty0;ty<=ty1;ty++) for(let tx=tx0;tx<=tx1;tx++){
     const wx=((tx%n)+n)%n;
     if(wx<bx0||wx>bx1||ty<by0||ty>by1) continue;
     const px=Math.round((tx-x0)*sc), py=Math.round((ty-y0)*sc), pw=Math.round((tx+1-x0)*sc)-px, ph=Math.round((ty+1-y0)*sc)-py;
-    const img=getTile(L,tz,wx,ty);
+    const img=getTile(L,tz,wx,ty,Math.hypot(tx+0.5-cxT,ty+0.5-cyT)+li*0.3);
     if(img){ ctx.drawImage(img,px,py,pw,ph); continue; }
     if(L.nofallback) continue;
-    for(let d=1;d<=5&&tz-d>=L.min;d++){            // tạm vẽ ô ở mức thu nhỏ hơn trong khi chờ
+    let done=false;
+    for(let d=1;d<=6&&tz-d>=0;d++){                 // tạm vẽ ô mức thấp hơn (đã có sẵn) trong khi chờ
       const p=peekTile(L,tz-d,wx>>d,ty>>d); if(!p) continue;
       const f=1<<d, sw=p.width/f, sh=p.height/f;
-      ctx.drawImage(p,(wx%f)*sw,(ty%f)*sh,sw,sh,px,py,pw,ph); break; }
+      ctx.drawImage(p,(wx%f)*sw,(ty%f)*sh,sw,sh,px,py,pw,ph); done=true; break; }
+    if(!done){                                       // khi thu nhỏ: dùng 4 ô con đã có
+      for(let k=0;k<4;k++){ const c=peekTile(L,tz+1,wx*2+(k&1),ty*2+(k>>1)); if(!c) continue;
+        const hw=pw/2, hh=ph/2; ctx.drawImage(c,px+(k&1)*hw,py+(k>>1)*hh,hw,hh); } }
   }
 }
 
@@ -211,7 +242,7 @@ function dot(x,y,r,fill,stroke){ ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fillSt
 function draw(){
   dirty=false;
   ctx.setTransform(DPR,0,0,DPR,0,0); ctx.fillStyle=charts.some(c=>set.charts[c.id]!==false&&c.format!=='pbf')?'#f1ecdc':'#a9cbe0'; ctx.fillRect(0,0,W,H);
-  for(const L of activeLayers()) drawLayer(L);
+  want.clear(); activeLayers().forEach((L,i)=>drawLayer(L,i));
   // vết đã lưu + vết đang ghi
   for(const t of tracks) if(t.show!==false) line(t.pts.map(p=>({lat:p[0],lon:p[1]})),'#8e24aa',2.5);
   if(rec) line(rec.pts.map(p=>({lat:p[0],lon:p[1]})),'#e53935',3);
@@ -260,7 +291,7 @@ function draw(){
     if(head!=null){ ctx.save(); ctx.translate(x,y); ctx.rotate(head*D2R); ctx.beginPath(); ctx.moveTo(0,-17); ctx.lineTo(10,12); ctx.lineTo(0,6); ctx.lineTo(-10,12); ctx.closePath();
       ctx.fillStyle=stale?'#78909c':'#1565c0'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); ctx.restore(); }
     else dot(x,y,9,stale?'#78909c':'#1565c0','#fff'); }
-  drawScale();
+  drawScale(); pumpTiles();
   set.view={lat:y2lat(S.cy),lon:x2lon(S.cx),zoom:S.zoom};
 }
 function drawScale(){ const lat=y2lat(S.cy), nmpp=40075016.686*Math.cos(lat*D2R)/scale()/1852;
@@ -274,9 +305,13 @@ function drawScale(){ const lat=y2lat(S.cy), nmpp=40075016.686*Math.cos(lat*D2R)
 const ptrs=new Map(); let g=null, lpTimer=null, lastTap=0;
 function zoomAt(px,py,z){ z=Math.max(2,Math.min(20,z)); const k0=scale(); const wx=S.cx+(px-W/2)/k0, wy=S.cy+(py-H/2)/k0;
   S.zoom=z; const k=scale(); S.cx=wx-(px-W/2)/k; S.cy=Math.max(0,Math.min(1,wy-(py-H/2)/k)); redraw(); }
-function zoomBy(d){ zoomAt(W/2,H/2,Math.round(S.zoom)+d); saveSetSoon(); }
+let zAnim=0;
+function animZoom(px,py,target){ target=Math.max(2,Math.min(20,target)); const z0=S.zoom, t0=performance.now(), D=220; cancelAnimationFrame(zAnim);
+  const step=now=>{ const k=Math.min(1,(now-t0)/D), e=1-Math.pow(1-k,3); zoomAt(px,py,z0+(target-z0)*e); if(k<1) zAnim=requestAnimationFrame(step); else saveSetSoon(); };
+  zAnim=requestAnimationFrame(step); }
+function zoomBy(d){ animZoom(W/2,H/2,Math.round(S.zoom)+d); }
 let ssT=null; const saveSetSoon=()=>{ clearTimeout(ssT); ssT=setTimeout(saveSet,1500); };
-cv.addEventListener('pointerdown',e=>{ cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+cv.addEventListener('pointerdown',e=>{ cancelAnimationFrame(zAnim); cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
   if(ptrs.size===1){ g={x0:e.clientX,y0:e.clientY,t0:Date.now(),moved:false,pinch:false};
     clearTimeout(lpTimer); lpTimer=setTimeout(()=>{ if(g&&!g.moved&&!g.pinch){ g.long=true; longPress(g.x0,g.y0); } },600);
   } else if(ptrs.size===2){ clearTimeout(lpTimer); const [a,b]=[...ptrs.values()]; g.pinch=true; g.d0=Math.hypot(a.x-b.x,a.y-b.y)||1; g.z0=S.zoom; } });
@@ -288,7 +323,7 @@ cv.addEventListener('pointermove',e=>{ const p=ptrs.get(e.pointerId); if(!p||!g)
     zoomAt((a.x+b.x)/2,(a.y+b.y)/2,g.z0+Math.log2(d/g.d0)); } });
 function pup(e){ if(!ptrs.has(e.pointerId)) return; ptrs.delete(e.pointerId); clearTimeout(lpTimer);
   if(ptrs.size===0&&g){ if(!g.moved&&!g.pinch&&!g.long&&Date.now()-g.t0<450){ const now=Date.now();
-      if(now-lastTap<300&&!mode){ zoomAt(e.clientX,e.clientY,S.zoom+1); lastTap=0; } else { lastTap=now; tap(e.clientX,e.clientY); } }
+      if(now-lastTap<300&&!mode){ animZoom(e.clientX,e.clientY,Math.round(S.zoom)+1); lastTap=0; } else { lastTap=now; tap(e.clientX,e.clientY); } }
     g=null; saveSetSoon(); } }
 cv.addEventListener('pointerup',pup); cv.addEventListener('pointercancel',pup);
 cv.addEventListener('wheel',e=>{ e.preventDefault(); zoomAt(e.clientX,e.clientY,S.zoom-e.deltaY/400); },{passive:false});
@@ -331,7 +366,7 @@ function ask(title,def,cb,type){ modalCb=cb; $('modal').innerHTML=`<div class="b
 function confirmBox(msg,cb){ modalCb=cb; $('modal').innerHTML=`<div class="box"><p>${esc(msg)}</p><div class="acts"><button class="b" onclick="closeModal()">Huỷ</button><button class="b r" onclick="okModal()">Đồng ý</button></div></div>`; $('modal').style.display='flex'; }
 function okModal(){ const i=$('mi'); const v=i?i.value.trim():true; const cb=modalCb; closeModal(); if(cb&&(v!=='')) cb(v); }
 function closeModal(){ $('modal').style.display='none'; modalCb=null; }
-function openPanel(title,html){ hidePopup(); $('panel').innerHTML=`<header><span>${title}</span><button class="b x" onclick="closePanel()">✕</button></header><div class="body">${html}</div>`; $('panel').style.display='flex'; }
+function openPanel(title,html){ hidePopup(); $('panel').dataset.t=title; $('panel').innerHTML=`<header><span>${title}</span><button class="b x" onclick="closePanel()">✕</button></header><div class="body">${html}</div>`; $('panel').style.display='flex'; }
 function closePanel(){ $('panel').style.display='none'; }
 window.onBack=function(){ if($('modal').style.display==='flex'){ closeModal(); return true; }
   if($('panel').style.display==='flex'){ closePanel(); return true; }
@@ -545,7 +580,7 @@ function checkAnchor(){ if(!anchor||!fix) return; const d=distNm(anchor,fix)*185
 
 /* ================= Lớp hải đồ & MBTiles ================= */
 function refreshCharts(){ try{ charts = NA ? JSON.parse(NA.listCharts()) : []; }catch(e){ charts=[]; } redraw(); }
-window.onChartsChanged=function(newId){ refreshCharts(); if(newId){ set.charts[newId]=true; saveSet(); const c=charts.find(c=>c.id===newId); if(c&&c.bounds) fitBounds(c.bounds); } if($('panel').style.display==='flex') showLayers(); };
+window.onChartsChanged=function(newId){ refreshCharts(); if(newId){ set.charts[newId]=true; saveSet(); const c=charts.find(c=>c.id===newId); if(c&&c.bounds) fitBounds(c.bounds); } if($('panel').style.display==='flex'&&$('panel').dataset.t==='Lớp hải đồ') showLayers(); };
 window.onImportProgress=function(pct,name){ toast('Đang nạp '+name+'… '+pct+'%'); };
 window.onToast=toast;
 function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm?'checked':''} onchange="set.osm=this.checked;saveSet();redraw()">Bản đồ nền OpenStreetMap</label>
@@ -554,7 +589,11 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
   <div class="cl" style="margin-top:10px">Hiển thị toạ độ</div><select onchange="set.fmt=this.value;saveSet();if(fix)$('pos').textContent=fmtPos(fix)"><option value="dms" ${set.fmt!=='dm'?'selected':''}>Độ° phút' giây" (10°21'30.0"N)</option><option value="dm" ${set.fmt==='dm'?'selected':''}>Độ° phút' thập phân (10°21.500'N)</option></select>
   <p class="note">Hai lớp trên cần mạng lần đầu; các vùng đã xem được lưu lại để dùng khi ra khơi.</p>
   <h3 style="margin:14px 0 4px">Hải đồ MBTiles của bạn</h3>`;
-  h+=charts.length?charts.map(c=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Mức '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div><button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa nạp tệp nào.</p>';
+  const oc=orderedCharts().reverse();   // hiển thị lớp trên cùng trước
+  h+=oc.length?oc.map((c,i)=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Zoom '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div>`+
+    (oc.length>1?`<button class="b" ${i===0?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',1)">▲</button><button class="b" ${i===oc.length-1?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',-1)">▼</button>`:'')+
+    `<button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa nạp tệp nào.</p>';
+  if(oc.length>1) h+=`<p class="note">Tệp ở trên được vẽ đè lên tệp ở dưới. Mặc định app tự xếp tệp chi tiết (zoom cao) lên trên, tệp tổng quát (zoom thấp) xuống dưới, nên khi phóng to thu nhỏ app tự chuyển sang tệp phù hợp. ${set.chartOrder?'<a href="#" onclick="autoOrder();return false" style="color:#7cc4ff">Xếp lại tự động</a>':''}</p>`;
   h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Nạp tệp .mbtiles</button></div><p class="note">Hỗ trợ MBTiles dạng ảnh (PNG, JPG, WebP). Tệp được chép vào bộ nhớ riêng của app; sau khi nạp xong có thể xoá tệp gốc.</p>`;
   openPanel('Lớp hải đồ',h); }
 function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
