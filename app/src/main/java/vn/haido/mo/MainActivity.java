@@ -419,70 +419,95 @@ public class MainActivity extends Activity implements LocationListener {
         }).start();
     }
 
-    void importMbtiles(final Uri uri) {
+    // Nạp một hoặc nhiều tệp MBTiles, lần lượt từng tệp trên một luồng nền
+    void importMbtilesMany(final java.util.List<Uri> uris) {
         new Thread(() -> {
-            String name = "haido.mbtiles";
-            long size = -1;
-            try {
-                Cursor c = getContentResolver().query(uri, null, null, null, null);
-                if (c != null) {
-                    if (c.moveToFirst()) {
-                        int i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                        if (i >= 0 && c.getString(i) != null) name = c.getString(i);
-                        i = c.getColumnIndex(OpenableColumns.SIZE);
-                        if (i >= 0 && !c.isNull(i)) size = c.getLong(i);
-                    }
-                    c.close();
+            int ok = 0, total = uris.size();
+            String lastId = null;
+            for (int k = 0; k < total; k++) {
+                String id = importOne(uris.get(k), k + 1, total);
+                if (id != null) {
+                    ok++;
+                    lastId = id;
+                    if (k < total - 1) js("window.onChartsChanged&&onChartsChanged()");
                 }
-            } catch (Exception ignored) {}
-            name = name.replaceAll("[^\\p{L}\\p{N}._ -]", "_").replaceAll("['\"]", "_");
-            if (!name.toLowerCase().endsWith(".mbtiles")) name = name + ".mbtiles";
-            String id = name.replaceAll("(?i)\\.mbtiles$", "");
-            File out = new File(chartDir(), name);
-            File tmp = new File(chartDir(), name + ".part");
-            try {
-                infos.remove(id);
-                closePool(id);
-                InputStream in = getContentResolver().openInputStream(uri);
-                OutputStream o = new FileOutputStream(tmp);
-                byte[] buf = new byte[1 << 20];
-                long done = 0;
-                int n, lastPct = -1;
-                while ((n = in.read(buf)) > 0) {
-                    o.write(buf, 0, n);
-                    done += n;
-                    if (size > 0) {
-                        int pct = (int) (done * 100 / size);
-                        if (pct != lastPct) { lastPct = pct; js("window.onImportProgress&&onImportProgress(" + pct + "," + JSONObject.quote(name) + ")"); }
-                    }
-                }
-                o.close();
-                in.close();
-                if (out.exists()) out.delete();
-                if (!tmp.renameTo(out)) throw new Exception("rename");
-                if (openChart(out)) {
-                    toast("Đã nạp hải đồ: " + id);
-                    js("window.onChartsChanged&&onChartsChanged(" + JSONObject.quote(id) + ")");
-                } else {
-                    out.delete();
-                    toast("Tệp này không phải MBTiles hợp lệ");
-                }
-            } catch (Exception e) {
-                tmp.delete();
-                toast("Không nạp được tệp (kiểm tra dung lượng trống)");
             }
+            if (total > 1) toast("Đã nạp " + ok + "/" + total + " tệp hải đồ");
+            if (lastId != null && ok > 0) js("window.onChartsChanged&&onChartsChanged(" + JSONObject.quote(lastId) + ")");
         }).start();
+    }
+
+    String importOne(final Uri uri, int idx, int total) {
+        String name = "haido.mbtiles";
+        long size = -1;
+        try {
+            Cursor c = getContentResolver().query(uri, null, null, null, null);
+            if (c != null) {
+                if (c.moveToFirst()) {
+                    int i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                    if (i >= 0 && c.getString(i) != null) name = c.getString(i);
+                    i = c.getColumnIndex(OpenableColumns.SIZE);
+                    if (i >= 0 && !c.isNull(i)) size = c.getLong(i);
+                }
+                c.close();
+            }
+        } catch (Exception ignored) {}
+        name = name.replaceAll("[^\\p{L}\\p{N}._ -]", "_").replaceAll("['\"]", "_");
+        if (!name.toLowerCase().endsWith(".mbtiles")) name = name + ".mbtiles";
+        String id = name.replaceAll("(?i)\\.mbtiles$", "");
+        String label = (total > 1 ? "(" + idx + "/" + total + ") " : "") + name;
+        File out = new File(chartDir(), name);
+        File tmp = new File(chartDir(), name + ".part");
+        try {
+            infos.remove(id);
+            closePool(id);
+            InputStream in = getContentResolver().openInputStream(uri);
+            OutputStream o = new FileOutputStream(tmp);
+            byte[] buf = new byte[1 << 20];
+            long done = 0;
+            int n, lastPct = -1;
+            while ((n = in.read(buf)) > 0) {
+                o.write(buf, 0, n);
+                done += n;
+                if (size > 0) {
+                    int pct = (int) (done * 100 / size);
+                    if (pct != lastPct) { lastPct = pct; js("window.onImportProgress&&onImportProgress(" + pct + "," + JSONObject.quote(label) + ")"); }
+                }
+            }
+            o.close();
+            in.close();
+            if (out.exists()) out.delete();
+            new File(out.getPath() + ".zooms.json").delete();
+            if (!tmp.renameTo(out)) throw new Exception("rename");
+            if (openChart(out)) {
+                toast("Đã nạp hải đồ: " + label);
+                return id;
+            }
+            out.delete();
+            toast("Không phải MBTiles hợp lệ: " + name);
+        } catch (Exception e) {
+            tmp.delete();
+            toast("Không nạp được " + name + " (kiểm tra dung lượng trống)");
+        }
+        return null;
     }
 
     // ---------- chọn / lưu tệp ----------
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (res != RESULT_OK || data == null || data.getData() == null) return;
-        final Uri uri = data.getData();
+        if (res != RESULT_OK || data == null) return;
         if (req == REQ_MBT) {
-            importMbtiles(uri);
-        } else if (req == REQ_GPX_IN) {
+            java.util.List<Uri> list = new java.util.ArrayList<>();
+            android.content.ClipData cd = data.getClipData();
+            if (cd != null) for (int k = 0; k < cd.getItemCount(); k++) { Uri u = cd.getItemAt(k).getUri(); if (u != null) list.add(u); }
+            else if (data.getData() != null) list.add(data.getData());
+            if (!list.isEmpty()) importMbtilesMany(list);
+            return;
+        }
+        if (data.getData() == null) return;
+        final Uri uri = data.getData();
+        if (req == REQ_GPX_IN) {
             new Thread(() -> {
                 try {
                     byte[] d = readAll(getContentResolver().openInputStream(uri));
@@ -504,6 +529,7 @@ public class MainActivity extends Activity implements LocationListener {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
+        if (req == REQ_MBT) i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);   // chọn nhiều tệp cùng lúc
         try { startActivityForResult(i, req); } catch (Exception e) { toast("Không mở được trình chọn tệp"); }
     }
 
