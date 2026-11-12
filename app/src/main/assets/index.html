@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Hải Đồ Mở</title>
+<title>Hải đồ VN</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;overflow:hidden;background:#0b2233;color:#eaf2f7;font:15px/1.35 system-ui,Roboto,sans-serif;user-select:none;-webkit-user-select:none}
@@ -109,7 +109,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.2';
+const APP_VER='1.3';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -164,9 +164,9 @@ function peekTile(L,z,x,y){ const t=tiles.get(L.id+'/'+z+'/'+x+'/'+y); return t&
 function activeLayers(){
   const a=[];
   if(set.osm) a.push({id:'osm',min:0,max:19,url:(z,x,y)=> NA ? `/t/osm/${z}/${x}/${y}` : `https://tile.openstreetmap.org/${z}/${x}/${y}.png`});
-  if(set.sea) a.push({id:'sea',min:9,max:18,nofallback:true,url:(z,x,y)=> NA ? `/t/sea/${z}/${x}/${y}` : `https://tiles.openseamap.org/seamark/${z}/${x}/${y}.png`});
-  for(const c of charts) if(set.charts[c.id]!==false && c.format!=='pbf')
+  for(const c of charts) if(set.charts[c.id]!==false && c.format!=='pbf')      // hải đồ MBTiles nằm dưới lớp phao tiêu
     a.push({id:'m_'+c.id,min:c.minzoom,max:c.maxzoom,bounds:c.bounds,over:true,url:(z,x,y)=>`/m/${encodeURIComponent(c.id)}/${z}/${x}/${y}`});
+  if(set.sea) a.push({id:'sea',min:9,max:18,nofallback:true,url:(z,x,y)=> NA ? `/t/sea/${z}/${x}/${y}` : `https://tiles.openseamap.org/seamark/${z}/${x}/${y}.png`});
   return a;
 }
 function drawLayer(L){
@@ -210,7 +210,7 @@ function label(t,x,y,col){ ctx.font='600 13px system-ui,sans-serif'; ctx.lineWid
 function dot(x,y,r,fill,stroke){ ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fillStyle=fill; ctx.fill(); if(stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=2; ctx.stroke(); } }
 function draw(){
   dirty=false;
-  ctx.setTransform(DPR,0,0,DPR,0,0); ctx.fillStyle='#a9cbe0'; ctx.fillRect(0,0,W,H);
+  ctx.setTransform(DPR,0,0,DPR,0,0); ctx.fillStyle=charts.some(c=>set.charts[c.id]!==false&&c.format!=='pbf')?'#f1ecdc':'#a9cbe0'; ctx.fillRect(0,0,W,H);
   for(const L of activeLayers()) drawLayer(L);
   // vết đã lưu + vết đang ghi
   for(const t of tracks) if(t.show!==false) line(t.pts.map(p=>({lat:p[0],lon:p[1]})),'#8e24aa',2.5);
@@ -666,7 +666,7 @@ function showAis(){ openPanel('AIS & GPS tàu qua Wi‑Fi',`<p class="note">Kế
 function aisConnect(){ set.ais={host:$('ah').value.trim(),port:parseInt($('ap').value)||10110,proto:$('at').value}; saveSet(); if(NA) NA.aisConnect(set.ais.host,set.ais.port,set.ais.proto); else toast('Chỉ dùng được trong app Android'); }
 
 /* ================= GPX ================= */
-function buildGpx(){ const x=s=>esc(s); let o='<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="HaiDoMo" xmlns="http://www.topografix.com/GPX/1/1">\n';
+function buildGpx(){ const x=s=>esc(s); let o='<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="HaiDoVN" xmlns="http://www.topografix.com/GPX/1/1">\n';
   for(const w of wpts) o+=`<wpt lat="${w.lat}" lon="${w.lon}"><name>${x(w.name)}</name></wpt>\n`;
   for(const r of routes) o+=`<rte><name>${x(r.name)}</name>`+r.pts.map(p=>`<rtept lat="${p.lat}" lon="${p.lon}"/>`).join('')+'</rte>\n';
   for(const t of tracks) o+=`<trk><name>${x(t.name)}</name><trkseg>`+t.pts.map(p=>`<trkpt lat="${p[0]}" lon="${p[1]}">${p[2]?'<time>'+new Date(p[2]).toISOString()+'</time>':''}</trkpt>`).join('')+'</trkseg></trk>\n';
@@ -694,7 +694,7 @@ function showMenu(){ openPanel('Chức năng',`<div class="grid">
   <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem dự báo tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
 function showGpx(){ openPanel('Nhập / Xuất GPX',`<div class="grid"><button class="b p" onclick="NA?NA.importGpx():toast('Chỉ dùng được trong app Android')">⬇ Nhập tệp GPX</button><button class="b p" onclick="exportGpx()">⬆ Xuất tệp GPX</button></div>
   <p class="note"><b>Nhập:</b> thêm điểm, tuyến, vết từ tệp .gpx (từ máy định vị, Navionics, OpenCPN…) vào app, không xoá dữ liệu đang có.<br><b>Xuất:</b> lưu toàn bộ ${wpts.length} điểm, ${routes.length} tuyến, ${tracks.length} vết ra một tệp .gpx để sao lưu hoặc chuyển sang máy khác.</p>`); }
-function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-size:18px"><b>Hải Đồ Mở</b> · phiên bản ${APP_VER}</p>
+function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-size:18px"><b>Hải đồ VN</b> · phiên bản ${APP_VER}</p>
   <p>Phần mềm tạo bởi <b>Mr Công</b><br>📞 <b>0586 568 569</b></p>
   <p>Chuyên cung cấp:<br>• Phần mềm hàng hải<br>• Máy tính bảng, iPad đi biển<br>• AIS Pilot Plug Wi‑Fi và thiết bị AIS<br>• Lắp đặt, hướng dẫn sử dụng…</p>
   <div class="grid"><button class="b p" onclick="openUrl('tel:0586568569')">📞 Gọi điện</button><button class="b p" onclick="openUrl('https://zalo.me/0586568569')">💬 Nhắn Zalo</button></div>
