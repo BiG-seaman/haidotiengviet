@@ -478,8 +478,27 @@ public class MainActivity extends Activity implements LocationListener {
         t.start();
     }
 
+    // Gom các câu NMEA (AIS "!" và GPS/la bàn "$") gửi sang giao diện 5 lần mỗi giây
+    final StringBuilder nmeaBuf = new StringBuilder();
+    boolean nmeaPending = false;
+    final Runnable nmeaFlush = new Runnable() {
+        @Override public void run() {
+            String s;
+            synchronized (nmeaBuf) { s = nmeaBuf.toString(); nmeaBuf.setLength(0); nmeaPending = false; }
+            if (web != null && s.length() > 0) web.evaluateJavascript("window.onNmeaBatch&&onNmeaBatch(" + JSONObject.quote(s) + ")", null);
+        }
+    };
+
     void nmea(String ln) {
-        if (ln.length() > 10 && ln.length() < 200 && ln.charAt(0) == '!') js("window.onNmea&&onNmea(" + JSONObject.quote(ln) + ")");
+        ln = ln.trim();
+        if (ln.length() < 6 || ln.length() > 300) return;
+        if (ln.indexOf('!') < 0 && ln.indexOf('$') < 0) return;
+        synchronized (nmeaBuf) {
+            if (nmeaBuf.length() < 200000) nmeaBuf.append(ln).append('\n');
+            if (nmeaPending) return;
+            nmeaPending = true;
+        }
+        ui.postDelayed(nmeaFlush, 200);
     }
 
     // ---------- cầu nối JavaScript ----------
