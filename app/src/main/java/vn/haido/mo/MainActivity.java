@@ -62,6 +62,11 @@ public class MainActivity extends Activity implements LocationListener {
     final Handler ui = new Handler(Looper.getMainLooper());
     final Map<String, SQLiteDatabase> dbs = new ConcurrentHashMap<>();
     final Map<String, JSONObject> infos = new ConcurrentHashMap<>();
+    // nhiều kết nối đọc cho mỗi tệp MBTiles để đọc ô song song trên nhiều nhân CPU (~75% số nhân)
+    final Map<String, SQLiteDatabase[]> pools = new ConcurrentHashMap<>();
+    final Map<String, String> paths = new ConcurrentHashMap<>();
+    final java.util.concurrent.atomic.AtomicInteger rr = new java.util.concurrent.atomic.AtomicInteger();
+    final int POOL = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() * 3 / 4));
     String pendingGpx = null;
 
     // báo động
@@ -103,7 +108,8 @@ public class MainActivity extends Activity implements LocationListener {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
-                if (!HOST.equals(u.getHost())) return null;
+                String host = u.getHost();
+                if (host == null || !(host.equals(HOST) || host.endsWith("." + HOST))) return null;
                 try {
                     WebResourceResponse res = serve(u.getPath());
                     return res != null ? res : notFound();
@@ -156,7 +162,7 @@ public class MainActivity extends Activity implements LocationListener {
         ui.removeCallbacks(alarmTick);
         if (tone != null) tone.release();
         stopAis();
-        for (SQLiteDatabase d : dbs.values()) try { d.close(); } catch (Exception ignored) {}
+        for (String id : new java.util.ArrayList<>(dbs.keySet())) closePool(id);
         super.onDestroy();
     }
 
@@ -219,13 +225,47 @@ public class MainActivity extends Activity implements LocationListener {
         return d == null ? null : image(d);
     }
 
+    static SQLiteDatabase openDb(String path) {
+        SQLiteDatabase d = SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY | SQLiteDatabase.NO_LOCALIZED_COLLATORS);
+        try { Cursor pc = d.rawQuery("PRAGMA mmap_size=268435456", null); pc.moveToFirst(); pc.close(); } catch (Exception ignored) {}
+        return d;
+    }
+
+    SQLiteDatabase conn(String id) {
+        SQLiteDatabase[] p = pools.get(id);
+        if (p == null) return dbs.get(id);
+        int i = Math.floorMod(rr.getAndIncrement(), p.length);
+        SQLiteDatabase d = p[i];
+        if (d == null) {
+            synchronized (p) {
+                if (p[i] == null) {
+                    try { p[i] = openDb(paths.get(id)); } catch (Exception e) { return dbs.get(id); }
+                }
+                d = p[i];
+            }
+        }
+        return d;
+    }
+
+    void closePool(String id) {
+        SQLiteDatabase[] p = pools.remove(id);
+        paths.remove(id);
+        SQLiteDatabase main = dbs.remove(id);
+        if (p != null) for (SQLiteDatabase d : p) if (d != null && d != main) try { d.close(); } catch (Exception ignored) {}
+        if (main != null) try { main.close(); } catch (Exception ignored) {}
+    }
+
     byte[] chartTile(String id, int z, int x, int y) {
-        SQLiteDatabase db = dbs.get(id);
+        SQLiteDatabase db = conn(id);
         if (db == null) return null;
         int tmsY = (1 << z) - 1 - y;
         // số nguyên ghép thẳng vào câu lệnh: so sánh đúng cả khi "tiles" là VIEW (không có kiểu cột)
-        Cursor c = db.rawQuery("SELECT tile_data FROM tiles WHERE zoom_level=" + z + " AND tile_column=" + x + " AND tile_row=" + tmsY + " LIMIT 1", null);
-        try { return c.moveToFirst() ? c.getBlob(0) : null; } finally { c.close(); }
+        try {
+            Cursor c = db.rawQuery("SELECT tile_data FROM tiles WHERE zoom_level=" + z + " AND tile_column=" + x + " AND tile_row=" + tmsY + " LIMIT 1", null);
+            try { return c.moveToFirst() ? c.getBlob(0) : null; } finally { c.close(); }
+        } catch (Exception e) {
+            return null;   // tệp vừa bị xoá hoặc thay
+        }
     }
 
     byte[] onlineTile(String src, int z, int x, int y) throws Exception {
@@ -328,6 +368,10 @@ public class MainActivity extends Activity implements LocationListener {
             try { Cursor pc = db.rawQuery("PRAGMA mmap_size=268435456", null); pc.moveToFirst(); pc.close(); } catch (Exception ignored) {}
             dbs.put(id, db);
             infos.put(id, o);
+            SQLiteDatabase[] pool = new SQLiteDatabase[POOL];
+            pool[0] = db;
+            paths.put(id, f.getPath());
+            pools.put(id, pool);
             computeZooms(f, id, db);
             return true;
         } catch (Exception e) {
@@ -397,9 +441,8 @@ public class MainActivity extends Activity implements LocationListener {
             File out = new File(chartDir(), name);
             File tmp = new File(chartDir(), name + ".part");
             try {
-                SQLiteDatabase old = dbs.remove(id);
                 infos.remove(id);
-                if (old != null) old.close();
+                closePool(id);
                 InputStream in = getContentResolver().openInputStream(uri);
                 OutputStream o = new FileOutputStream(tmp);
                 byte[] buf = new byte[1 << 20];
@@ -579,9 +622,8 @@ public class MainActivity extends Activity implements LocationListener {
         @JavascriptInterface public void pickMbtiles() { ui.post(() -> pick(REQ_MBT)); }
 
         @JavascriptInterface public void deleteChart(String id) {
-            SQLiteDatabase db = dbs.remove(id);
             infos.remove(id);
-            if (db != null) try { db.close(); } catch (Exception ignored) {}
+            closePool(id);
             File[] fs = chartDir().listFiles();
             if (fs != null) for (File f : fs) {
                 String nm = f.getName();
