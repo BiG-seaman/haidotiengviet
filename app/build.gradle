@@ -10,8 +10,8 @@ android {
         applicationId 'vn.haido.mo'
         minSdk 24
         targetSdk 34
-        versionCode 5
-        versionName '1.4'
+        versionCode 6
+        versionName '1.5'
     }
 
     // Dùng một khoá ký cố định để các bản build sau cài đè được lên bản trước (không mất dữ liệu)
