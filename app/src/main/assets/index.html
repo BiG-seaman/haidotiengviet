@@ -48,6 +48,13 @@ table.w td,table.w th{padding:6px 4px;border-bottom:1px solid #1d3d52;text-align
 table.w th{color:#8fb3c9;font-weight:500}
 table.w td:first-child,table.w th:first-child{text-align:left}
 .note{font-size:12px;color:#8fb3c9;padding:8px 0}
+.cf{display:grid;grid-template-columns:1fr 1fr 1.25fr 68px;gap:6px}
+.cf input,.cf select{margin:2px 0 8px;padding:11px 6px}
+.cl{font-size:13px;color:#8fb3c9;margin-top:4px}
+#panel h3{margin:16px 0 6px;font-size:15px}
+#banner.ack{background:#e07b00}
+#banner button{font-size:14px}
+.info p{margin:8px 0}
 #attr{position:absolute;left:6px;bottom:4px;font-size:10px;color:#123;background:rgba(255,255,255,.6);padding:1px 5px;border-radius:4px;z-index:2}
 </style>
 </head>
@@ -61,6 +68,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
     <div><span class="l" id="navname">ĐẾN</span></div>
     <div><span class="l">P.VỊ</span><span class="v" id="nbrg">--</span><span class="l">°</span></div>
     <div><span class="l">CÒN</span><span class="v" id="ndst">--</span> <span class="l">nm</span></div>
+    <div><span class="l">LỆCH</span><span class="v" id="nxte">--</span></div>
     <div><span class="l">T.GIAN</span><span class="v" id="nttg">--</span></div>
     <button class="b r" style="margin-left:auto;padding:6px 10px" onclick="stopNav()">Dừng</button>
   </div>
@@ -95,8 +103,10 @@ const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 let wpts   = store.load('wpts')   || [];
 let routes = store.load('routes') || [];
 let tracks = store.load('tracks') || [];
-let set = Object.assign({osm:true, sea:true, charts:{}, night:false, ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
+let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
+                         alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15},
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
+const APP_VER='1.1';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -109,7 +119,12 @@ function bearing(a,b){ const p1=a.lat*D2R,p2=b.lat*D2R,dl=(b.lon-a.lon)*D2R;
   return (Math.atan2(y,x)/D2R+360)%360; }
 function fmtDM(v,pos,neg){ const h=v>=0?pos:neg; v=Math.abs(v); const d=Math.floor(v); let m=(v-d)*60;
   if(m>=59.9995){ m=0; return (d+1)+'°00.000\''+h; } return d+'°'+(m<10?'0':'')+m.toFixed(3)+'\''+h; }
-const fmtPos = p => fmtDM(p.lat,'N','S')+'  '+fmtDM(p.lon,'E','W');
+function dmsParts(v){ v=Math.abs(v); let d=Math.floor(v); const mf=(v-d)*60; let m=Math.floor(mf), s=Math.round((mf-m)*600)/10;
+  if(s>=60){ s=0; m++; } if(m>=60){ m=0; d++; } return [d,m,s]; }
+function fmtDMS(v,pos,neg){ const [d,m,s]=dmsParts(v); return d+'°'+String(m).padStart(2,'0')+'\''+(s<10?'0':'')+s.toFixed(1)+'"'+(v>=0?pos:neg); }
+const fmtPos = p => set.fmt==='dm' ? fmtDM(p.lat,'N','S')+'  '+fmtDM(p.lon,'E','W') : fmtDMS(p.lat,'N','S')+'  '+fmtDMS(p.lon,'E','W');
+// cross-track: dương = tàu lệch sang phải đường A→B
+function xteNm(a,b,p){ const d13=distNm(a,p)/R_NM, t13=bearing(a,p)*D2R, t12=bearing(a,b)*D2R; return Math.asin(Math.sin(d13)*Math.sin(t13-t12))*R_NM; }
 const fmtNm = d => d<0.1 ? Math.round(d*1852)+' m' : (d<10?d.toFixed(2):d.toFixed(1))+' nm';
 const fmt3 = d => String(Math.round(d)%360).padStart(3,'0');
 function fmtDur(h){ if(!isFinite(h)) return '--'; const m=Math.round(h*60); return m<60 ? m+'ph' : Math.floor(m/60)+'g'+String(m%60).padStart(2,'0'); }
@@ -179,7 +194,8 @@ let fix=null;            // {lat,lon,sog,cog,acc,t}
 let follow=true;
 let mode=null, modePts=[]; // 'measure' | 'route'
 let nav=null;            // {name, pts:[...], idx}
-let anchor=store.load('anchor'); let anchorAlarm=false;
+let anchor=store.load('anchor');
+const alm={}; let soundOn=false;   // báo động đang có: key -> {msg, ack}
 let rec=store.load('rec');   // vết đang ghi {pts:[[lat,lon,t]]}
 const ais=new Map(); let aisStatus='Chưa kết nối';
 
@@ -200,8 +216,9 @@ function draw(){
   for(const r of routes) if(r.show!==false){ line(r.pts,'#ef6c00',3,[8,6]);
     r.pts.forEach((p,i)=>{ const [x,y]=ll2s(p.lat,p.lon); dot(x,y,5,'#fff','#ef6c00'); if(i===0) label(r.name,x+8,y-8,'#8a3d00'); }); }
   // dẫn đường
-  if(nav){ const rest=nav.pts.slice(nav.idx); if(fix) line([fix,...rest],'#d50000',3.5); else line(rest,'#d50000',3.5);
-    const t=nav.pts[nav.idx], [x,y]=ll2s(t.lat,t.lon); dot(x,y,9,'rgba(213,0,0,.25)','#d50000'); }
+  if(nav){ const rest=nav.pts.slice(nav.idx); const st=nav.from||fix; line(st?[st,...rest]:rest,'#d50000',3.5);
+    const t=nav.pts[nav.idx], [x,y]=ll2s(t.lat,t.lon); if(fix&&nav.from) line([fix,t],'rgba(213,0,0,.7)',1.5,[4,4]);
+    dot(x,y,9,'rgba(213,0,0,.25)','#d50000'); }
   // điểm đánh dấu
   for(const w of wpts){ const [x,y]=ll2s(w.lat,w.lon); if(x<-50||y<-50||x>W+50||y>H+50) continue;
     ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-8,y-20); ctx.arc(x,y-22,8,Math.PI,0); ctx.lineTo(x,y); ctx.fillStyle='#d81b60'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
@@ -216,12 +233,13 @@ function draw(){
     const [x,y]=ll2s(a.lat,a.lon); if(x<-30||y<-30||x>W+30||y>H+30) continue;
     const ang=((a.cog!=null&&a.cog<360)?a.cog:(a.hdg!=null&&a.hdg<360?a.hdg:0))*D2R;
     ctx.save(); ctx.translate(x,y); ctx.rotate(ang); ctx.beginPath(); ctx.moveTo(0,-13); ctx.lineTo(7,9); ctx.lineTo(-7,9); ctx.closePath();
-    ctx.fillStyle=now-a.t>180000?'rgba(120,120,120,.7)':'rgba(46,160,67,.85)'; ctx.fill(); ctx.strokeStyle='#103'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
-    if(S.zoom>=11) label(a.name||String(id),x+10,y+4,'#1b5e20'); }
+    ctx.fillStyle=now-a.t>180000?'rgba(120,120,120,.7)':(a.risk?'rgba(213,0,0,.9)':'rgba(46,160,67,.85)'); ctx.fill(); ctx.strokeStyle='#103'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
+    if(a.risk){ ctx.beginPath(); ctx.arc(x,y,18,0,7); ctx.strokeStyle='#d50000'; ctx.lineWidth=2.5; ctx.stroke(); }
+    if(S.zoom>=11||a.risk) label(a.name||String(id),x+12,y+4,a.risk?'#b71c1c':'#1b5e20'); }
   // neo
   if(anchor){ const [x,y]=ll2s(anchor.lat,anchor.lon); const mpp=40075016.686*Math.cos(anchor.lat*D2R)/scale();
-    ctx.beginPath(); ctx.arc(x,y,anchor.r/mpp,0,7); ctx.fillStyle=anchorAlarm?'rgba(213,0,0,.18)':'rgba(10,132,214,.14)'; ctx.fill();
-    ctx.strokeStyle=anchorAlarm?'#d50000':'#0a84d6'; ctx.lineWidth=2; ctx.stroke(); label('⚓',x-7,y+5,'#0a3d62'); }
+    ctx.beginPath(); ctx.arc(x,y,anchor.r/mpp,0,7); ctx.fillStyle=alm.anchor?'rgba(213,0,0,.18)':'rgba(10,132,214,.14)'; ctx.fill();
+    ctx.strokeStyle=alm.anchor?'#d50000':'#0a84d6'; ctx.lineWidth=2; ctx.stroke(); label('⚓',x-7,y+5,'#0a3d62'); }
   // tàu
   if(fix){ const [x,y]=ll2s(fix.lat,fix.lon);
     if(fix.sog>0.5&&fix.cog!=null){ const mpp=40075016.686*Math.cos(fix.lat*D2R)/scale(); const len=Math.min(fix.sog*1852/6/mpp,Math.max(W,H)); // vectơ 10 phút
@@ -273,6 +291,7 @@ function tap(x,y){ const p=s2ll(x,y);
   if(h.type==='w') wptPopup(h.o,x,y);
   else { const a=h.o; let s='MMSI '+h.id+'<br>'+fmtPos(a)+'<br>Tốc độ '+(a.sog!=null?a.sog.toFixed(1)+' kn':'--')+' · Hướng '+(a.cog!=null&&a.cog<360?fmt3(a.cog)+'°':'--');
     if(fix) s+='<br>Cách tàu '+fmtNm(distNm(fix,a))+' · P.vị '+fmt3(bearing(fix,a))+'°';
+    const c=cpaOf(a); if(c) s+='<br>'+(a.risk?'<b style="color:#c62828">⚠ ':'')+'CPA '+fmtNm(c.cpa)+' · TCPA '+(c.tcpa>=0?Math.round(c.tcpa)+' phút':'đang xa dần')+(a.risk?'</b>':'');
     showPopup(x,y,esc(a.name||'Tàu AIS'),s,[]); } }
 function longPress(x,y){ if(mode) return; const p=s2ll(x,y); let s=fmtPos(p);
   if(fix) s+='<br>Cách tàu '+fmtNm(distNm(fix,p))+' · P.vị '+fmt3(bearing(fix,p))+'°';
@@ -280,7 +299,7 @@ function longPress(x,y){ if(mode) return; const p=s2ll(x,y); let s=fmtPos(p);
     ['📍 Đánh dấu điểm',()=>addWpt(p)],
     ['🧭 Đi tới đây',()=>startNav('Điểm chọn',[p])],
     ['📏 Đo từ đây',()=>{ startMode('measure'); modePts.push(p); updMode(); }],
-    ['🌬 Thời tiết tại đây',()=>showWeather(p)] ]); }
+    ['🌬 Dự báo gió, sóng tại đây',()=>showPointWeather(p)] ]); }
 let popActs=[];
 function showPopup(x,y,title,sub,acts){ const el=$('popup'); popActs=acts;
   el.innerHTML=`<div class="t">${title}</div><div class="s">${sub}</div>`+acts.map((a,i)=>`<button onclick="popAct(${i})">${a[0]}</button>`).join('');
@@ -289,7 +308,7 @@ function showPopup(x,y,title,sub,acts){ const el=$('popup'); popActs=acts;
 function popAct(i){ const f=popActs[i][1]; hidePopup(); f(); }
 function hidePopup(){ $('popup').style.display='none'; }
 function wptPopup(w,x,y){ let s=fmtPos(w); if(fix) s+='<br>Cách tàu '+fmtNm(distNm(fix,w))+' · P.vị '+fmt3(bearing(fix,w))+'°';
-  showPopup(x,y,esc(w.name),s,[ ['🧭 Đi tới điểm này',()=>startNav(w.name,[w])], ['✏️ Đổi tên',()=>renameWpt(w)], ['🗑 Xoá',()=>delWpt(w.id)] ]); }
+  showPopup(x,y,esc(w.name),s,[ ['🧭 Đi tới điểm này',()=>startNav(w.name,[w])], ['✏️ Sửa tên, toạ độ',()=>editWpt(w.id)], ['🗑 Xoá',()=>delWpt(w.id)] ]); }
 
 /* ================= Hộp thoại, thông báo ================= */
 let toastT=null; function toast(m){ const t=$('toast'); t.textContent=m; t.style.display='block'; clearTimeout(toastT); toastT=setTimeout(()=>t.style.display='none',2800); }
@@ -313,20 +332,36 @@ window.onGps=function(lat,lon,spd,brg,acc,t){
   $('sog').textContent=sog.toFixed(1); $('cog').textContent=fix.cog!=null?fmt3(fix.cog):'--'; $('pos').textContent=fmtPos(fix);
   if(follow&&!g){ S.cx=lon2x(lon); S.cy=lat2y(lat); }
   if(rec){ const l=rec.pts[rec.pts.length-1]; if(!l||distNm({lat:l[0],lon:l[1]},fix)*1852>12){ rec.pts.push([+lat.toFixed(6),+lon.toFixed(6),fix.t]); if(rec.pts.length%15===0) store.save('rec',rec); } }
-  updNav(); checkAnchor(); redraw(); };
+  updNav(); checkAnchor(); if(ais.size) checkCpa(); redraw(); };
 function toggleFollow(){ follow=!follow; if(follow){ if(fix){ S.cx=lon2x(fix.lon); S.cy=lat2y(fix.lat); if(S.zoom<10) S.zoom=13; redraw(); } else toast('Đang chờ tín hiệu GPS…'); } updFollow(); }
 function updFollow(){ $('bfollow').classList.toggle('on',follow); }
 
 /* ================= Điểm đánh dấu ================= */
 function addWpt(p){ ask('Tên điểm đánh dấu','Điểm '+(wpts.length+1),name=>{ wpts.push({id:uid(),name,lat:p.lat,lon:p.lon}); store.save('wpts',wpts); redraw(); toast('Đã lưu điểm'); }); }
-function renameWpt(w){ ask('Đổi tên điểm',w.name,n=>{ w.name=n; store.save('wpts',wpts); redraw(); }); }
+/* --- Ô nhập toạ độ độ-phút-giây --- */
+function coordForm(id,p){ p=p||fix||s2ll(W/2,H/2); const a=dmsParts(p.lat), b=dmsParts(p.lon);
+  const f=(k,v,ph)=>`<input type="number" inputmode="decimal" step="any" min="0" id="${id}${k}" value="${v}" placeholder="${ph}" onfocus="this.select()">`;
+  return `<div class="cl">Vĩ độ: độ · phút · giây</div><div class="cf">${f('ad',a[0],'độ')}${f('am',a[1],'phút')}${f('as',a[2],'giây')}<select id="${id}ah"><option${p.lat>=0?' selected':''}>N</option><option${p.lat<0?' selected':''}>S</option></select></div>`+
+         `<div class="cl">Kinh độ: độ · phút · giây</div><div class="cf">${f('od',b[0],'độ')}${f('om',b[1],'phút')}${f('os',b[2],'giây')}<select id="${id}oh"><option${p.lon>=0?' selected':''}>E</option><option${p.lon<0?' selected':''}>W</option></select></div>`; }
+function readCoord(id){ const g=k=>{ const v=String($(id+k).value).trim().replace(',','.'); return v===''?0:Number(v); };
+  const v=['ad','am','as','od','om','os'].map(g);
+  if(v.some(x=>!isFinite(x)||x<0)){ toast('Toạ độ chưa đúng, chỉ nhập số'); return null; }
+  if(v[1]>=60||v[2]>=60||v[4]>=60||v[5]>=60){ toast('Phút và giây phải nhỏ hơn 60'); return null; }
+  let lat=v[0]+v[1]/60+v[2]/3600, lon=v[3]+v[4]/60+v[5]/3600;
+  if(lat>90||lon>180){ toast('Vĩ độ tối đa 90°, kinh độ tối đa 180°'); return null; }
+  if($(id+'ah').value==='S') lat=-lat; if($(id+'oh').value==='W') lon=-lon;
+  return {lat,lon}; }
+function editWpt(id){ const w=wpts.find(w=>w.id===id); if(!w) return;
+  openPanel('Sửa điểm đánh dấu',`Tên điểm<input id="wn" type="text" value="${esc(w.name)}">${coordForm('wc',w)}<div class="grid"><button class="b" onclick="showWpts()">Huỷ</button><button class="b p" onclick="saveWptCoord('${w.id}')">Lưu</button></div>`); }
 function delWpt(id){ wpts=wpts.filter(w=>w.id!==id); store.save('wpts',wpts); redraw(); if($('panel').style.display==='flex') showWpts(); }
 function goWpt(id){ const w=wpts.find(w=>w.id===id); if(!w) return; closePanel(); follow=false; updFollow(); S.cx=lon2x(w.lon); S.cy=lat2y(w.lat); if(S.zoom<11) S.zoom=13; redraw(); }
 function navWpt(id){ const w=wpts.find(w=>w.id===id); if(w){ closePanel(); startNav(w.name,[w]); } }
-function addWptByCoord(){ ask('Nhập toạ độ (vĩ độ, kinh độ) dạng thập phân', fix?fix.lat.toFixed(5)+', '+fix.lon.toFixed(5):'16.00000, 108.00000', v=>{
-  const m=v.split(/[,;\s]+/).map(Number); if(m.length<2||!isFinite(m[0])||!isFinite(m[1])||Math.abs(m[0])>90||Math.abs(m[1])>180){ toast('Toạ độ không hợp lệ'); return; } addWpt({lat:m[0],lon:m[1]}); }); }
+function addWptByCoord(){ openPanel('Nhập toạ độ điểm',`Tên điểm<input id="wn" type="text" value="Điểm ${wpts.length+1}">${coordForm('wc')}<div class="grid"><button class="b" onclick="showWpts()">Quay lại</button><button class="b p" onclick="saveWptCoord()">Lưu điểm</button></div><p class="note">Giây có thể nhập số lẻ, ví dụ 30.5</p>`); }
+function saveWptCoord(id){ const p=readCoord('wc'); if(!p) return; const name=$('wn').value.trim()||('Điểm '+(wpts.length+1));
+  const w=id&&wpts.find(w=>w.id===id); if(w){ w.name=name; w.lat=p.lat; w.lon=p.lon; } else wpts.push({id:uid(),name,lat:p.lat,lon:p.lon});
+  store.save('wpts',wpts); redraw(); toast('Đã lưu điểm'); showWpts(); }
 function showWpts(){ let h=`<div class="grid"><button class="b p" onclick="closePanel();fix?addWpt(fix):toast('Chưa có GPS')">📍 Đánh dấu vị trí tàu</button><button class="b" onclick="addWptByCoord()">⌨ Nhập toạ độ</button></div>`;
-  h+=wpts.length?wpts.map(w=>`<div class="row"><div class="g" onclick="goWpt('${w.id}')"><b>${esc(w.name)}</b><small>${fmtPos(w)}${fix?' · '+fmtNm(distNm(fix,w)):''}</small></div><button class="b" onclick="navWpt('${w.id}')">Đi tới</button><button class="b r" onclick="delWpt('${w.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có điểm nào. Nhấn giữ trên hải đồ để đánh dấu.</p>';
+  h+=wpts.length?wpts.map(w=>`<div class="row"><div class="g" onclick="goWpt('${w.id}')"><b>${esc(w.name)}</b><small>${fmtPos(w)}${fix?' · '+fmtNm(distNm(fix,w)):''}</small></div><button class="b" onclick="navWpt('${w.id}')">Đi tới</button><button class="b" onclick="editWpt('${w.id}')">Sửa</button><button class="b r" onclick="delWpt('${w.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có điểm nào. Nhấn giữ trên hải đồ để đánh dấu.</p>';
   openPanel('Điểm đánh dấu',h); }
 
 /* ================= Đo & tạo tuyến ================= */
@@ -340,7 +375,21 @@ function updMode(){ const b=$('modebar'); if(!mode){ b.style.display='none'; ret
   b.style.display='block'; }
 function saveRoute(){ if(modePts.length<2){ toast('Cần ít nhất 2 điểm'); return; } const pts=modePts.slice();
   ask('Tên tuyến','Tuyến '+(routes.length+1),name=>{ routes.push({id:uid(),name,pts}); store.save('routes',routes); endMode(); toast('Đã lưu tuyến'); }); }
-function showRoutes(){ let h=`<div class="grid"><button class="b p" onclick="startMode('route')">＋ Tạo tuyến mới</button></div>`;
+/* --- Nhập tuyến bằng toạ độ từng điểm --- */
+let rdraft=null;
+function routeEntry(){ rdraft={name:'Tuyến '+(routes.length+1),pts:[]}; showRouteEntry(); }
+function showRouteEntry(){ const d=rdraft;
+  let h=`Tên tuyến<input id="rn" type="text" value="${esc(d.name)}">`;
+  h+=d.pts.length?d.pts.map((p,i)=>`<div class="row"><div class="g"><b>Điểm ${i+1}</b><small>${fmtPos(p)}${i?'<br>'+fmtNm(distNm(d.pts[i-1],p))+' · hướng '+fmt3(bearing(d.pts[i-1],p))+'°':''}</small></div><button class="b r" onclick="delRoutePt(${i})">Xoá</button></div>`).join(''):'<p class="note">Chưa có điểm nào. Nhập toạ độ bên dưới rồi bấm "Thêm điểm".</p>';
+  if(d.pts.length>1) h+=`<p><b>Tổng chiều dài: ${fmtNm(pathNm(d.pts))}</b></p>`;
+  h+=`<h3>Thêm điểm ${d.pts.length+1}</h3>${coordForm('rc',d.pts[d.pts.length-1])}<div class="grid"><button class="b" onclick="addRoutePt()">＋ Thêm điểm</button><button class="b p" onclick="saveRouteEntry()">💾 Lưu tuyến</button></div>`;
+  openPanel('Nhập tuyến bằng toạ độ',h); }
+function addRoutePt(){ const p=readCoord('rc'); if(!p) return; rdraft.name=$('rn').value; rdraft.pts.push(p); showRouteEntry();
+  const b=document.querySelector('#panel .body'); if(b) b.scrollTop=b.scrollHeight; toast('Đã thêm điểm '+rdraft.pts.length); }
+function delRoutePt(i){ rdraft.name=$('rn').value; rdraft.pts.splice(i,1); showRouteEntry(); }
+function saveRouteEntry(){ rdraft.name=$('rn').value.trim()||rdraft.name; if(rdraft.pts.length<2){ toast('Tuyến cần ít nhất 2 điểm'); return; }
+  const r={id:uid(),name:rdraft.name,pts:rdraft.pts}; routes.push(r); store.save('routes',routes); rdraft=null; toast('Đã lưu tuyến'); fitPts(r.id,'r'); }
+function showRoutes(){ let h=`<div class="grid"><button class="b p" onclick="startMode('route')">👆 Đánh dấu trên hải đồ</button><button class="b p" onclick="routeEntry()">⌨ Nhập toạ độ từng điểm</button></div>`;
   h+=routes.length?routes.map(r=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${r.show!==false?'checked':''} onchange="togRoute('${r.id}',this.checked)"><div class="g" onclick="fitPts('${r.id}','r')"><b>${esc(r.name)}</b><small>${r.pts.length} điểm · ${fmtNm(pathNm(r.pts))}</small></div><button class="b" onclick="navRoute('${r.id}')">Chạy</button><button class="b" onclick="navRoute('${r.id}',1)">Ngược</button><button class="b r" onclick="delRoute('${r.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có tuyến nào.</p>';
   openPanel('Tuyến đường',h); }
 function togRoute(id,v){ const r=routes.find(r=>r.id===id); if(r){ r.show=v; store.save('routes',routes); redraw(); } }
@@ -353,15 +402,58 @@ function fitBounds(b){ follow=false; updFollow(); const x0=lon2x(b[0]),x1=lon2x(
   S.zoom=Math.max(2,Math.min(17,Math.min(zx,zy))); redraw(); saveSetSoon(); }
 
 /* ================= Dẫn đường ================= */
-function startNav(name,pts){ nav={name,pts,idx:0}; $('navrow').style.display='flex'; updNav(); redraw(); toast('Bắt đầu dẫn đường: '+name); }
-function stopNav(){ nav=null; $('navrow').style.display='none'; redraw(); }
+function startNav(name,pts){ nav={name,pts,idx:0,from:fix?{lat:fix.lat,lon:fix.lon}:null}; $('navrow').style.display='flex'; updNav(); posBanner(); redraw(); toast('Bắt đầu dẫn đường: '+name); }
+function stopNav(){ nav=null; $('navrow').style.display='none'; setAlarm('xte',null); posBanner(); redraw(); }
 function updNav(){ if(!nav) return; const t=nav.pts[nav.idx];
   $('navname').textContent=(nav.pts.length>1?`${nav.name} (${nav.idx+1}/${nav.pts.length})`:nav.name).toUpperCase().slice(0,26);
-  if(!fix){ $('nbrg').textContent='--'; $('ndst').textContent='--'; $('nttg').textContent='--'; return; }
+  if(!fix){ $('nbrg').textContent='--'; $('ndst').textContent='--'; $('nttg').textContent='--'; $('nxte').textContent='--'; return; }
+  if(!nav.from) nav.from={lat:fix.lat,lon:fix.lon};
   let d=distNm(fix,t);
-  if(d<0.03){ if(nav.idx<nav.pts.length-1){ nav.idx++; toast('Đã tới điểm '+nav.idx+', chuyển sang điểm kế'); return updNav(); } else { toast('Đã tới đích: '+nav.name); if(NA) NA.beep(); stopNav(); return; } }
+  if(d<0.03){ if(nav.idx<nav.pts.length-1){ nav.from=nav.pts[nav.idx]; nav.idx++; toast('Đã tới điểm '+nav.idx+', chuyển sang điểm kế'); if(NA) NA.beep(); return updNav(); } else { toast('Đã tới đích: '+nav.name); if(NA) NA.beep(); stopNav(); return; } }
   const total=d+pathNm(nav.pts.slice(nav.idx));
-  $('nbrg').textContent=fmt3(bearing(fix,t)); $('ndst').textContent=(d<10?d.toFixed(2):d.toFixed(1)); $('nttg').textContent=fix.sog>0.5?fmtDur(total/fix.sog):'--'; }
+  $('nbrg').textContent=fmt3(bearing(fix,t)); $('ndst').textContent=(d<10?d.toFixed(2):d.toFixed(1)); $('nttg').textContent=fix.sog>0.5?fmtDur(total/fix.sog):'--';
+  const legLen=distNm(nav.from,t); const x=legLen>0.01?xteNm(nav.from,t,fix):0;
+  $('nxte').textContent=Math.abs(x)<0.005?'0':(Math.abs(x)<10?Math.abs(x).toFixed(2):Math.abs(x).toFixed(1))+(x>0?' P':' T');
+  setAlarm('xte', set.alm.xte&&Math.abs(x)>set.alm.xteNm ? `LỆCH ĐƯỜNG ${Math.abs(x).toFixed(2)} nm về bên ${x>0?'PHẢI':'TRÁI'}` : null); }
+
+/* ================= Báo động chung ================= */
+let bannerHtml='';
+function setAlarm(key,msg){ if(msg){ if(alm[key]) alm[key].msg=msg; else alm[key]={msg,ack:false}; } else if(alm[key]) delete alm[key]; else return; renderAlarms(); }
+function renderAlarms(){ const keys=Object.keys(alm), b=$('banner'); const want=keys.some(k=>!alm[k].ack);
+  if(!keys.length){ b.style.display='none'; bannerHtml=''; }
+  else { const h=keys.map(k=>'<div>⚠ '+esc(alm[k].msg)+'</div>').join('')+`<div style="margin-top:8px;display:flex;gap:8px">${want?'<button class="b" onclick="ackAlarms()">🔕 Tắt còi</button>':''}<button class="b" onclick="showAlarms()">Cài đặt</button>${alm.anchor?'<button class="b" onclick="clearAnchor()">Huỷ neo</button>':''}</div>`;
+    if(h!==bannerHtml){ b.innerHTML=h; bannerHtml=h; } b.classList.toggle('ack',!want); b.style.display='block'; posBanner(); }
+  if(want!==soundOn){ soundOn=want; if(NA) NA.alarm(want); } }
+function posBanner(){ $('banner').style.top=($('top').offsetHeight+8)+'px'; }
+function ackAlarms(){ for(const k in alm) alm[k].ack=true; renderAlarms(); }
+
+/* --- CPA / TCPA với tàu AIS (mặt phẳng cục bộ, đơn vị hải lý & hải lý/giờ) --- */
+function cpaOf(a){ if(!fix||a.lat==null) return null; const k=Math.cos(fix.lat*D2R);
+  const rx=(a.lon-fix.lon)*60*k, ry=(a.lat-fix.lat)*60;
+  const os=(fix.sog>0.3&&fix.cog!=null)?fix.sog:0, oc=(fix.cog||0)*D2R;
+  const ts=(a.sog!=null&&a.sog<102.3)?a.sog:0, tc=((a.cog!=null&&a.cog<360)?a.cog:(a.hdg!=null&&a.hdg<360?a.hdg:0))*D2R;
+  const vx=ts*Math.sin(tc)-os*Math.sin(oc), vy=ts*Math.cos(tc)-os*Math.cos(oc), v2=vx*vx+vy*vy;
+  const t=v2<1e-6?0:-(rx*vx+ry*vy)/v2;
+  return {cpa:Math.hypot(rx+vx*t,ry+vy*t), tcpa:t*60, range:Math.hypot(rx,ry), rel:Math.sqrt(v2)}; }
+function checkCpa(){ const now=Date.now(), seen=new Set();
+  for(const [id,a] of ais){ a.risk=false; if(now-a.t>180000) continue; const c=cpaOf(a); if(!c) continue;
+    if(set.alm.cpa&&c.rel>0.5&&c.tcpa>=0&&c.tcpa<=set.alm.tcpaMin&&c.cpa<=set.alm.cpaNm){ a.risk=true; seen.add('cpa_'+id);
+      setAlarm('cpa_'+id,`NGUY CƠ ĐÂM VA: ${a.name||'MMSI '+id} – CPA ${c.cpa.toFixed(2)} nm sau ${Math.round(c.tcpa)} phút, P.vị ${fmt3(bearing(fix,a))}°`); } }
+  for(const k of Object.keys(alm)) if(k.startsWith('cpa_')&&!seen.has(k)) setAlarm(k,null); }
+setInterval(()=>{ if(ais.size){ checkCpa(); redraw(); } },3000);
+
+function showAlarms(){ const A=set.alm;
+  openPanel('Cài đặt báo động',`<h3 style="margin-top:4px">⚓ Báo động neo</h3>${anchor?`<p>Đang bật, bán kính ${anchor.r} m</p><div class="grid"><button class="b r" onclick="clearAnchor();showAlarms()">Huỷ báo động neo</button></div>`:`<div class="grid"><button class="b p" onclick="setAnchor()">Đặt neo tại vị trí tàu</button></div>`}
+  <h3>↔ Lệch đường đi</h3><label class="sw"><input type="checkbox" id="ax" ${A.xte?'checked':''}>Báo khi chạy theo điểm, theo tuyến mà lệch khỏi đường đi</label>
+  <div class="cl">Lệch quá (hải lý)</div><input id="axn" type="number" inputmode="decimal" step="any" value="${A.xteNm}">
+  <h3>⚠ Nguy cơ đâm va (AIS)</h3><label class="sw"><input type="checkbox" id="ac" ${A.cpa?'checked':''}>Báo khi có tàu AIS nguy hiểm</label>
+  <div class="cl">CPA nhỏ hơn (hải lý)</div><input id="acn" type="number" inputmode="decimal" step="any" value="${A.cpaNm}">
+  <div class="cl">TCPA nhỏ hơn (phút)</div><input id="act" type="number" inputmode="decimal" step="any" value="${A.tcpaMin}">
+  <div class="grid"><button class="b" onclick="closePanel()">Đóng</button><button class="b p" onclick="saveAlarms()">💾 Lưu cài đặt</button></div>
+  <p class="note">CPA: khoảng cách gần nhất giữa hai tàu nếu cùng giữ nguyên hướng và tốc độ. TCPA: thời gian còn lại tới lúc gần nhất. Cần có GPS và dữ liệu AIS (mục 📡 AIS).</p>`); }
+function saveAlarms(){ const n=(id,def,min)=>{ const v=parseFloat(String($(id).value).replace(',','.')); return isFinite(v)&&v>=min?v:def; };
+  set.alm={xte:$('ax').checked,xteNm:n('axn',0.2,0.01),cpa:$('ac').checked,cpaNm:n('acn',2,0.05),tcpaMin:n('act',15,1)}; saveSet();
+  if(!set.alm.xte) setAlarm('xte',null); checkCpa(); updNav(); redraw(); toast('Đã lưu cài đặt báo động'); closePanel(); }
 
 /* ================= Vết đi ================= */
 function toggleRec(){ if(rec){ if(rec.pts.length>1){ const d=new Date(); tracks.push({id:uid(),name:'Vết '+d.toLocaleDateString('vi-VN')+' '+d.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}),pts:rec.pts}); store.save('tracks',tracks); toast('Đã lưu vết đi'); } else toast('Vết quá ngắn, không lưu');
@@ -376,12 +468,9 @@ function delTrack(id){ confirmBox('Xoá vết này?',()=>{ tracks=tracks.filter(
 
 /* ================= Báo động neo ================= */
 function setAnchor(){ if(!fix){ toast('Chưa có GPS'); return; } ask('Bán kính báo động neo (mét)','50',v=>{ const r=Math.max(10,parseFloat(v)||50); anchor={lat:fix.lat,lon:fix.lon,r}; store.save('anchor',anchor); closePanel(); redraw(); toast('Đã đặt báo động neo '+r+' m'); },'number'); }
-function clearAnchor(){ anchor=null; store.save('anchor',null); silence(); closePanel(); redraw(); }
+function clearAnchor(){ anchor=null; store.save('anchor',null); setAlarm('anchor',null); closePanel(); redraw(); }
 function checkAnchor(){ if(!anchor||!fix) return; const d=distNm(anchor,fix)*1852;
-  if(d>anchor.r){ if(!anchorAlarm){ anchorAlarm=true; if(NA) NA.alarm(true); }
-    $('banner').innerHTML=`⚠ TRÔI NEO! Cách điểm neo ${Math.round(d)} m <button class="b" style="float:right" onclick="clearAnchor()">Tắt</button>`; $('banner').style.display='block';
-  } else if(anchorAlarm) silence(); }
-function silence(){ anchorAlarm=false; if(NA) NA.alarm(false); $('banner').style.display='none'; }
+  setAlarm('anchor', d>anchor.r ? `TRÔI NEO! Cách điểm neo ${Math.round(d)} m` : null); }
 
 /* ================= Lớp hải đồ & MBTiles ================= */
 function refreshCharts(){ try{ charts = NA ? JSON.parse(NA.listCharts()) : []; }catch(e){ charts=[]; } redraw(); }
@@ -391,6 +480,7 @@ window.onToast=toast;
 function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm?'checked':''} onchange="set.osm=this.checked;saveSet();redraw()">Bản đồ nền OpenStreetMap</label>
   <label class="sw"><input type="checkbox" ${set.sea?'checked':''} onchange="set.sea=this.checked;saveSet();redraw()">Phao tiêu, đèn biển (OpenSeaMap)</label>
   <label class="sw"><input type="checkbox" ${set.night?'checked':''} onchange="set.night=this.checked;saveSet();applyNight()">Chế độ ban đêm</label>
+  <div class="cl" style="margin-top:10px">Hiển thị toạ độ</div><select onchange="set.fmt=this.value;saveSet();if(fix)$('pos').textContent=fmtPos(fix)"><option value="dms" ${set.fmt!=='dm'?'selected':''}>Độ° phút' giây" (10°21'30.0"N)</option><option value="dm" ${set.fmt==='dm'?'selected':''}>Độ° phút' thập phân (10°21.500'N)</option></select>
   <p class="note">Hai lớp trên cần mạng lần đầu; các vùng đã xem được lưu lại để dùng khi ra khơi.</p>
   <h3 style="margin:14px 0 4px">Hải đồ MBTiles của bạn</h3>`;
   h+=charts.length?charts.map(c=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Mức '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div><button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa nạp tệp nào.</p>';
@@ -403,7 +493,14 @@ function applyNight(){ document.body.classList.toggle('night',!!set.night); }
 
 /* ================= Thời tiết (Open-Meteo) ================= */
 const dir8 = d => ['B','ĐB','Đ','ĐN','N','TN','T','TB'][Math.round(d/45)%8];
-async function showWeather(p){ p=p||fix||s2ll(W/2,H/2);
+function openUrl(u){ if(NA&&NA.openUrl) NA.openUrl(u); else window.open(u,'_blank'); }
+const PW='https://www.passageweather.com/maps/';
+function showWeather(){ const r=(n,k)=>`<div class="row"><div class="g"><b>${n}</b></div><button class="b" onclick="openUrl('${PW}${k}/mappage.htm')">Mở</button></div>`;
+  openPanel('Thời tiết biển – PassageWeather',`<p class="note">Bản đồ dự báo gió, áp suất và sóng 7 ngày (các mô hình GFS, ECMWF…) của PassageWeather.com, mở trong trình duyệt. Cần có mạng.</p>
+  <h3>Biển Đông</h3><div class="grid"><button class="b p" onclick="openUrl('${PW}chinasea/mappage.htm')">🌬 Gió · Áp suất · Sóng</button><button class="b" onclick="openUrl('${PW}chinasea/mappage3.htm')">🌧 Tầm nhìn &amp; mưa</button><button class="b" onclick="openUrl('${PW}chinasea/mappage2.htm')">🌡 Nhiệt độ nước biển</button><button class="b" onclick="openUrl('https://www.passageweather.com/globalmap.htm')">🌐 Chọn vùng khác</button></div>
+  <h3>Vùng lân cận</h3>${r('Eo biển Malacca','malacca')}${r('Nhật Bản – Micronesia','micronesia')}${r('Biển Nhật Bản','japan')}${r('Bắc Ấn Độ Dương','indian')}
+  <p class="note">Muốn xem nhanh dự báo gió, sóng tại một vị trí cụ thể: nhấn giữ vị trí đó trên hải đồ → "Dự báo gió, sóng tại đây".</p>`); }
+async function showPointWeather(p){ p=p||fix||s2ll(W/2,H/2);
   openPanel('Thời tiết biển','<p>Đang tải dự báo cho '+fmtPos(p)+'…</p>');
   try{ const q=`latitude=${p.lat.toFixed(3)}&longitude=${p.lon.toFixed(3)}&timezone=auto&forecast_days=3`;
     const [a,b]=await Promise.all([
@@ -467,10 +564,17 @@ function exportGpx(){ const n='haido-'+new Date().toISOString().slice(0,10)+'.gp
 function showMenu(){ openPanel('Chức năng',`<div class="grid">
   <button class="b" onclick="showWpts()">📍 Điểm đánh dấu</button><button class="b" onclick="showRoutes()">〰 Tuyến đường</button>
   <button class="b" onclick="showTracks()">👣 Vết đi${rec?' (đang ghi)':''}</button><button class="b" onclick="startMode('measure')">📏 Đo khoảng cách</button>
-  <button class="b" onclick="${anchor?'clearAnchor()':'setAnchor()'}">⚓ ${anchor?'Huỷ báo động neo':'Báo động neo'}</button><button class="b" onclick="showWeather()">🌬 Thời tiết biển</button>
+  <button class="b" onclick="showAlarms()">⚠ Báo động${Object.keys(alm).length?' (!)':''}</button><button class="b" onclick="showWeather()">🌬 Thời tiết biển</button>
   <button class="b" onclick="showAis()">📡 AIS</button><button class="b" onclick="showLayers()">▤ Lớp hải đồ</button>
-  <button class="b" onclick="NA?NA.importGpx():toast('Chỉ dùng được trong app Android')">⬇ Nhập GPX</button><button class="b" onclick="exportGpx()">⬆ Xuất GPX</button></div>
-  <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem thời tiết tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
+  <button class="b" onclick="showGpx()">⇅ Nhập / Xuất GPX</button><button class="b" onclick="showInfo()">ℹ Thông tin</button></div>
+  <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem dự báo tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
+function showGpx(){ openPanel('Nhập / Xuất GPX',`<div class="grid"><button class="b p" onclick="NA?NA.importGpx():toast('Chỉ dùng được trong app Android')">⬇ Nhập tệp GPX</button><button class="b p" onclick="exportGpx()">⬆ Xuất tệp GPX</button></div>
+  <p class="note"><b>Nhập:</b> thêm điểm, tuyến, vết từ tệp .gpx (từ máy định vị, Navionics, OpenCPN…) vào app, không xoá dữ liệu đang có.<br><b>Xuất:</b> lưu toàn bộ ${wpts.length} điểm, ${routes.length} tuyến, ${tracks.length} vết ra một tệp .gpx để sao lưu hoặc chuyển sang máy khác.</p>`); }
+function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-size:18px"><b>Hải Đồ Mở</b> · phiên bản ${APP_VER}</p>
+  <p>Phần mềm tạo bởi <b>Mr Công</b><br>📞 <b>0586 568 569</b></p>
+  <p>Chuyên cung cấp:<br>• Phần mềm hàng hải<br>• Máy tính bảng, iPad đi biển<br>• AIS Pilot Plug Wi‑Fi và thiết bị AIS<br>• Lắp đặt, hướng dẫn sử dụng…</p>
+  <div class="grid"><button class="b p" onclick="openUrl('tel:0586568569')">📞 Gọi điện</button><button class="b p" onclick="openUrl('https://zalo.me/0586568569')">💬 Nhắn Zalo</button></div>
+  <p class="note">Dữ liệu bản đồ: © OpenStreetMap, OpenSeaMap. Thời tiết: PassageWeather.com, Open-Meteo.<br>Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức, thiết bị hàng hải và việc quan sát của người đi biển.</p></div>`); }
 
 /* ================= Khởi động ================= */
 applyNight(); updFollow(); refreshCharts(); resize();
