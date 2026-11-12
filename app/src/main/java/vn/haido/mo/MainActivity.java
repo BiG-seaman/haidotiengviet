@@ -201,7 +201,7 @@ public class MainActivity extends Activity implements LocationListener {
         }
         Map<String, String> h = new HashMap<>();
         h.put("Access-Control-Allow-Origin", "*");
-        h.put("Cache-Control", "max-age=600");
+        h.put("Cache-Control", "max-age=86400");
         return new WebResourceResponse(mime, null, 200, "OK", h, new ByteArrayInputStream(d));
     }
 
@@ -223,8 +223,8 @@ public class MainActivity extends Activity implements LocationListener {
         SQLiteDatabase db = dbs.get(id);
         if (db == null) return null;
         int tmsY = (1 << z) - 1 - y;
-        Cursor c = db.rawQuery("SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?",
-                new String[]{String.valueOf(z), String.valueOf(x), String.valueOf(tmsY)});
+        // số nguyên ghép thẳng vào câu lệnh: so sánh đúng cả khi "tiles" là VIEW (không có kiểu cột)
+        Cursor c = db.rawQuery("SELECT tile_data FROM tiles WHERE zoom_level=" + z + " AND tile_column=" + x + " AND tile_row=" + tmsY + " LIMIT 1", null);
         try { return c.moveToFirst() ? c.getBlob(0) : null; } finally { c.close(); }
     }
 
@@ -325,13 +325,54 @@ public class MainActivity extends Activity implements LocationListener {
                     o.put("bounds", a);
                 } catch (Exception ignored) {}
             }
+            try { Cursor pc = db.rawQuery("PRAGMA mmap_size=268435456", null); pc.moveToFirst(); pc.close(); } catch (Exception ignored) {}
             dbs.put(id, db);
             infos.put(id, o);
+            computeZooms(f, id, db);
             return true;
         } catch (Exception e) {
             if (db != null) try { db.close(); } catch (Exception ignored) {}
             return false;
         }
+    }
+
+    // Đọc phạm vi ô của từng mức zoom (lưu kèm tệp .zooms.json để lần sau mở nhanh)
+    void computeZooms(final File f, final String id, final SQLiteDatabase db) {
+        new Thread(() -> {
+            try {
+                File side = new File(f.getPath() + ".zooms.json");
+                String sig = f.length() + ":" + f.lastModified();
+                JSONObject zs = null;
+                if (side.exists()) {
+                    JSONObject c = new JSONObject(new String(readAll(new FileInputStream(side)), StandardCharsets.UTF_8));
+                    if (sig.equals(c.optString("sig"))) zs = c.getJSONObject("zooms");
+                }
+                if (zs == null) {
+                    zs = new JSONObject();
+                    Cursor c = db.rawQuery("SELECT zoom_level, MIN(tile_column), MAX(tile_column), MIN(tile_row), MAX(tile_row) FROM tiles GROUP BY zoom_level", null);
+                    while (c.moveToNext()) {
+                        int z = c.getInt(0);
+                        if (z < 0 || z > 24) continue;
+                        int n = (1 << z) - 1;
+                        JSONArray a = new JSONArray();
+                        a.put(c.getInt(1)); a.put(c.getInt(2)); a.put(n - c.getInt(4)); a.put(n - c.getInt(3));
+                        zs.put(String.valueOf(z), a);
+                    }
+                    c.close();
+                    JSONObject out = new JSONObject();
+                    out.put("sig", sig);
+                    out.put("zooms", zs);
+                    FileOutputStream o = new FileOutputStream(side);
+                    o.write(out.toString().getBytes(StandardCharsets.UTF_8));
+                    o.close();
+                }
+                JSONObject info = infos.get(id);
+                if (info != null && dbs.get(id) == db && zs.length() > 0) {
+                    synchronized (info) { info.put("zooms", zs); }
+                    js("window.onChartsChanged&&onChartsChanged()");
+                }
+            } catch (Exception ignored) {}
+        }).start();
     }
 
     void importMbtiles(final Uri uri) {
@@ -531,7 +572,7 @@ public class MainActivity extends Activity implements LocationListener {
 
         @JavascriptInterface public String listCharts() {
             JSONArray a = new JSONArray();
-            for (JSONObject o : infos.values()) a.put(o);
+            for (JSONObject o : infos.values()) { synchronized (o) { try { a.put(new JSONObject(o.toString())); } catch (Exception ignored) {} } }
             return a.toString();
         }
 
@@ -542,7 +583,10 @@ public class MainActivity extends Activity implements LocationListener {
             infos.remove(id);
             if (db != null) try { db.close(); } catch (Exception ignored) {}
             File[] fs = chartDir().listFiles();
-            if (fs != null) for (File f : fs) if (f.getName().replaceAll("(?i)\\.mbtiles$", "").equals(id)) f.delete();
+            if (fs != null) for (File f : fs) {
+                String nm = f.getName();
+                if (nm.replaceAll("(?i)\\.mbtiles$", "").equals(id) || nm.equals(id + ".mbtiles.zooms.json")) f.delete();
+            }
         }
 
         @JavascriptInterface public void importGpx() { ui.post(() -> pick(REQ_GPX_IN)); }
