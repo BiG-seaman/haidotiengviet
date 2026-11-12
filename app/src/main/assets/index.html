@@ -55,6 +55,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 #banner.ack{background:#e07b00}
 #banner button{font-size:14px}
 .info p{margin:8px 0}
+#tidebox{position:absolute;left:10px;bottom:52px;background:rgba(8,28,44,.9);color:#eaf2f7;padding:7px 11px;border-radius:18px;font-size:14px;display:none;z-index:4;box-shadow:0 2px 6px rgba(0,0,0,.35);max-width:calc(100% - 90px)}
 #attr{position:absolute;left:6px;bottom:4px;font-size:10px;color:#123;background:rgba(255,255,255,.6);padding:1px 5px;border-radius:4px;z-index:2}
 </style>
 </head>
@@ -77,6 +78,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
   </div>
 </div>
 <div id="attr">© OpenStreetMap · OpenSeaMap</div>
+<div id="tidebox" onclick="openAutoTide()"></div>
 <div id="btns">
   <button class="fab" id="bfollow" onclick="toggleFollow()">◎</button>
   <button class="fab" onclick="zoomBy(1)">＋</button>
@@ -109,7 +111,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.6';
+const APP_VER='1.7';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -421,7 +423,8 @@ function applyFix(){ const src=curSrc(), f=src==='ship'?shipFix:phoneFix;
   updTop();
   if(follow&&!g){ S.cx=lon2x(fix.lon); S.cy=lat2y(fix.lat); }
   if(rec){ const l=rec.pts[rec.pts.length-1]; if(!l||distNm({lat:l[0],lon:l[1]},fix)*1852>12){ rec.pts.push([+fix.lat.toFixed(6),+fix.lon.toFixed(6),fix.t]); if(rec.pts.length%15===0) store.save('rec',rec); } }
-  updNav(); checkAnchor(); if(ais.size) checkCpa(); redraw(); }
+  updNav(); checkAnchor(); if(ais.size) checkCpa(); redraw();
+  if(!tideAuto||distNm(tideAuto.p,fix)>10) autoTide(); }
 function updTop(){ const show=(id,on)=>{ $(id).style.display=on?'':'none'; };
   if(!fix){ $('sog').textContent='--'; $('cog').textContent='--'; $('pos').textContent=curSrc()==='ship'?'Chưa có GPS tàu':'Chưa có GPS'; $('srctag').textContent=''; }
   else { $('sog').textContent=fix.sog.toFixed(1); $('cog').textContent=fix.cog!=null?fmt3(fix.cog):'--'; $('pos').textContent=fmtPos(fix);
@@ -617,6 +620,7 @@ window.onToast=toast;
 function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm?'checked':''} onchange="set.osm=this.checked;saveSet();redraw()">Bản đồ nền OpenStreetMap</label>
   <label class="sw"><input type="checkbox" ${set.sea?'checked':''} onchange="set.sea=this.checked;saveSet();redraw()">Phao tiêu, đèn biển (OpenSeaMap)</label>
   <label class="sw"><input type="checkbox" ${set.night?'checked':''} onchange="set.night=this.checked;saveSet();applyNight()">Chế độ ban đêm</label>
+  <label class="sw"><input type="checkbox" ${set.tideBox!==false?'checked':''} onchange="setTideBox(this.checked)">Hiện thủy triều trên hải đồ (tự tải khi có mạng)</label>
   <div class="cl" style="margin-top:10px">Hiển thị toạ độ</div><select onchange="set.fmt=this.value;saveSet();if(fix)$('pos').textContent=fmtPos(fix)"><option value="dms" ${set.fmt!=='dm'?'selected':''}>Độ° phút' giây" (10°21'30.0"N)</option><option value="dm" ${set.fmt==='dm'?'selected':''}>Độ° phút' thập phân (10°21.500'N)</option></select>
   <p class="note">Hai lớp trên cần mạng lần đầu; các vùng đã xem được lưu lại để dùng khi ra khơi.</p>
   <div class="cl" style="margin-top:10px">Hiệu năng tải bản đồ</div><select onchange="setPerf(this.value)">
@@ -655,16 +659,18 @@ function tideExtrema(ts,vs){ const out=[];
     const den=a-2*b+c, off=den!==0?Math.max(-0.5,Math.min(0.5,0.5*(a-c)/den)):0;     // nội suy parabol để lấy giờ chính xác hơn
     out.push({t:ts[i]+off*3600000, h:b-0.25*(a-c)*off, hi}); }
   return out; }
-function tideAt(t){ const d=tideData; if(!d) return null; const i=d.ts.findIndex(x=>x>t); if(i<=0) return null;
+function tideAt(t,d){ d=d||tideData; if(!d) return null; const i=d.ts.findIndex(x=>x>t); if(i<=0) return null;
   const a=d.vs[i-1], b=d.vs[i]; if(a==null||b==null) return null; const k=(t-d.ts[i-1])/(d.ts[i]-d.ts[i-1]); return a+(b-a)*k; }
 const hhmm=t=>{ const d=new Date(t); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
 const DOW=['CN','T2','T3','T4','T5','T6','T7'];
+async function fetchTide(p){
+  const r=await fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${p.lat.toFixed(3)}&longitude=${p.lon.toFixed(3)}&hourly=sea_level_height_msl&timezone=auto&timeformat=unixtime&past_days=1&forecast_days=7`).then(r=>{ if(!r.ok) throw new Error('http'); return r.json(); });
+  const ts=(r.hourly&&r.hourly.time||[]).map(t=>t*1000), vs=(r.hourly&&r.hourly.sea_level_height_msl)||[];
+  if(!vs.some(v=>v!=null)) throw new Error('nodata');
+  return {ts,vs,p:{lat:p.lat,lon:p.lon},ex:tideExtrema(ts,vs),ft:Date.now()}; }
 async function showTide(p){ p=p||fix||s2ll(W/2,H/2);
   openPanel('Thủy triều','<p>Đang tải dữ liệu thủy triều cho '+fmtPos(p)+'…</p>');
-  try{ const r=await fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${p.lat.toFixed(3)}&longitude=${p.lon.toFixed(3)}&hourly=sea_level_height_msl&timezone=auto&timeformat=unixtime&past_days=1&forecast_days=7`).then(r=>r.json());
-    const ts=(r.hourly&&r.hourly.time||[]).map(t=>t*1000), vs=(r.hourly&&r.hourly.sea_level_height_msl)||[];
-    if(!vs.some(v=>v!=null)) throw new Error('nodata');
-    tideData={ts,vs,p,ex:tideExtrema(ts,vs)}; renderTide();
+  try{ tideData=await fetchTide(p); renderTide();
   }catch(e){ openPanel('Thủy triều',`<p>${e.message==='nodata'?'Không có dữ liệu thủy triều tại điểm này (có thể nằm trên đất liền hoặc trong sông). Hãy chọn một điểm ngoài biển.':'Không tải được dữ liệu thủy triều. Cần có kết nối mạng.'}</p>`); } }
 function renderTide(){ const d=tideData, now=Date.now(), cur=tideAt(now), nx=d.ex.find(e=>e.t>now);
   const trend=nx?(nx.hi?'đang lên ↑':'đang xuống ↓'):'';
@@ -697,6 +703,31 @@ function drawTide(){ const c=$('tidecv'); if(!c||!tideData) return; const d=tide
   g.strokeStyle='#ff5252'; g.lineWidth=1.5; g.beginPath(); g.moveTo(X(now),T); g.lineTo(X(now),hh-B); g.stroke();
   const cur=tideAt(now); if(cur!=null){ g.fillStyle='#ff5252'; g.beginPath(); g.arc(X(now),Y(cur),4,0,7); g.fill(); } }
 
+/* --- Thủy triều tự động trên màn hình hải đồ: tự tải khi có mạng, lưu lại để dùng khi mất mạng --- */
+let tideAuto=store.load('tideAuto'), tideTry=0;
+if(tideAuto&&tideAuto.ts) tideAuto.ex=tideExtrema(tideAuto.ts,tideAuto.vs); else tideAuto=null;
+async function autoTide(force){ if(set.tideBox===false) return;
+  const p=fix||s2ll(W/2,H/2), now=Date.now();
+  const far=!tideAuto||distNm(tideAuto.p,p)>10, old=!tideAuto||now-tideAuto.ft>3*3600000;
+  if(!force&&!far&&!old) return;
+  if(!force&&now-tideTry<10*60000) return;                 // lỗi/không mạng: 10 phút sau mới thử lại
+  if(navigator.onLine===false) return;
+  tideTry=now;
+  try{ const d=await fetchTide(p); tideAuto=d; tideTry=0; store.save('tideAuto',{ts:d.ts,vs:d.vs,p:d.p,ft:d.ft}); }
+  catch(e){ if(e.message==='nodata'&&far){ tideAuto={none:true,p:{lat:p.lat,lon:p.lon},ft:now}; } }
+  updTideBox(); }
+function updTideBox(){ const b=$('tidebox'); if(!b) return;
+  if(set.tideBox===false||!tideAuto){ b.style.display='none'; return; }
+  if(tideAuto.none){ b.innerHTML='🌊 <span style="opacity:.75">Không có dữ liệu triều ở đây</span>'; b.style.display='block'; return; }
+  const now=Date.now(), cur=tideAt(now,tideAuto), nx=tideAuto.ex.find(e=>e.t>now);
+  if(cur==null){ b.style.display='none'; return; }
+  const p=fix||s2ll(W/2,H/2), far=distNm(tideAuto.p,p)>30;
+  b.innerHTML=`🌊 <b>${cur>=0?'+':''}${cur.toFixed(2)} m</b> ${nx?(nx.hi?'↑':'↓'):''}`+(nx?` <span style="opacity:.85">· ${nx.hi?'Lớn':'Ròng'} ${hhmm(nx.t)} ${nx.h>=0?'+':''}${nx.h.toFixed(1)}</span>`:'')+(far?' <span style="color:#ffb74d">(xa)</span>':'');
+  b.style.display='block'; }
+function openAutoTide(){ if(tideAuto&&!tideAuto.none){ tideData=tideAuto; renderTide(); } else showTide(fix); }
+function setTideBox(v){ set.tideBox=v; saveSet(); if(v) autoTide(true); updTideBox(); }
+setInterval(()=>{ updTideBox(); autoTide(); },60000);
+window.addEventListener('online',()=>{ tideTry=0; autoTide(); });
 async function showPointWeather(p){ p=p||fix||s2ll(W/2,H/2);
   openPanel('Thời tiết biển','<p>Đang tải dự báo cho '+fmtPos(p)+'…</p>');
   try{ const q=`latitude=${p.lat.toFixed(3)}&longitude=${p.lon.toFixed(3)}&timezone=auto&forecast_days=3`;
@@ -827,7 +858,7 @@ function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-si
   <p class="note">Dữ liệu bản đồ: © OpenStreetMap, OpenSeaMap. Thời tiết: PassageWeather.com, Open-Meteo.<br>Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức, thiết bị hàng hải và việc quan sát của người đi biển.</p></div>`); }
 
 /* ================= Khởi động ================= */
-applyNight(); updFollow(); refreshCharts(); resize();
+applyNight(); updFollow(); refreshCharts(); resize(); updTideBox(); setTimeout(()=>autoTide(),1500);
 if(anchor) redraw();
 if(!NA && navigator.geolocation) navigator.geolocation.watchPosition(p=>window.onGps(p.coords.latitude,p.coords.longitude,p.coords.speed==null?-1:p.coords.speed,p.coords.heading==null?-1:p.coords.heading,p.coords.accuracy,p.timestamp),()=>{}, {enableHighAccuracy:true});
 if(NA) NA.ready();
