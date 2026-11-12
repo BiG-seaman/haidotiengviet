@@ -109,7 +109,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.5';
+const APP_VER='1.6';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -377,7 +377,8 @@ function longPress(x,y){ if(mode) return; const p=s2ll(x,y); let s=fmtPos(p);
     ['📍 Đánh dấu điểm',()=>addWpt(p)],
     ['🧭 Đi tới đây',()=>startNav('Điểm chọn',[p])],
     ['📏 Đo từ đây',()=>{ startMode('measure'); modePts.push(p); updMode(); }],
-    ['🌬 Dự báo gió, sóng tại đây',()=>showPointWeather(p)] ]); }
+    ['🌬 Dự báo gió, sóng tại đây',()=>showPointWeather(p)],
+    ['🌊 Thủy triều tại đây',()=>showTide(p)] ]); }
 let popActs=[];
 function showPopup(x,y,title,sub,acts){ const el=$('popup'); popActs=acts;
   el.innerHTML=`<div class="t">${title}</div><div class="s">${sub}</div>`+acts.map((a,i)=>`<button onclick="popAct(${i})">${a[0]}</button>`).join('');
@@ -629,7 +630,7 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
     (oc.length>1?`<button class="b" ${i===0?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',1)">▲</button><button class="b" ${i===oc.length-1?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',-1)">▼</button>`:'')+
     `<button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa nạp tệp nào.</p>';
   if(oc.length>1) h+=`<p class="note">Tệp ở trên được vẽ đè lên tệp ở dưới. Mặc định app tự xếp tệp chi tiết (zoom cao) lên trên, tệp tổng quát (zoom thấp) xuống dưới, nên khi phóng to thu nhỏ app tự chuyển sang tệp phù hợp. ${set.chartOrder?'<a href="#" onclick="autoOrder();return false" style="color:#7cc4ff">Xếp lại tự động</a>':''}</p>`;
-  h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Nạp tệp .mbtiles</button></div><p class="note">Hỗ trợ MBTiles dạng ảnh (PNG, JPG, WebP). Tệp được chép vào bộ nhớ riêng của app; sau khi nạp xong có thể xoá tệp gốc.</p>`;
+  h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Nạp tệp .mbtiles (chọn được nhiều tệp)</button></div><p class="note">Chọn nhiều tệp: trong trình chọn tệp, nhấn giữ một tệp rồi chạm thêm các tệp khác, sau đó bấm Chọn/Mở. Hỗ trợ MBTiles dạng ảnh (PNG, JPG, WebP). Tệp được chép vào bộ nhớ riêng của app; sau khi nạp xong có thể xoá tệp gốc.</p>`;
   openPanel('Lớp hải đồ',h); }
 function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
 function zoomChart(id){ const c=charts.find(c=>c.id===id); if(c&&c.bounds){ closePanel(); fitBounds(c.bounds); if(S.zoom<c.minzoom) S.zoom=c.minzoom; redraw(); } }
@@ -642,9 +643,60 @@ function openUrl(u){ if(NA&&NA.openUrl) NA.openUrl(u); else window.open(u,'_blan
 const PW='https://www.passageweather.com/maps/';
 function showWeather(){ const r=(n,k)=>`<div class="row"><div class="g"><b>${n}</b></div><button class="b" onclick="openUrl('${PW}${k}/mappage.htm')">Mở</button></div>`;
   openPanel('Thời tiết biển – PassageWeather',`<p class="note">Bản đồ dự báo gió, áp suất và sóng 7 ngày (các mô hình GFS, ECMWF…) của PassageWeather.com, mở trong trình duyệt. Cần có mạng.</p>
+  <h3>🌊 Thủy triều</h3><div class="grid"><button class="b p" onclick="showTide(fix)">Tại vị trí tàu</button><button class="b" onclick="showTide(s2ll(W/2,H/2))">Tại giữa màn hình</button></div>
   <h3>Biển Đông</h3><div class="grid"><button class="b p" onclick="openUrl('${PW}chinasea/mappage.htm')">🌬 Gió · Áp suất · Sóng</button><button class="b" onclick="openUrl('${PW}chinasea/mappage3.htm')">🌧 Tầm nhìn &amp; mưa</button><button class="b" onclick="openUrl('${PW}chinasea/mappage2.htm')">🌡 Nhiệt độ nước biển</button><button class="b" onclick="openUrl('https://www.passageweather.com/globalmap.htm')">🌐 Chọn vùng khác</button></div>
   <h3>Vùng lân cận</h3>${r('Eo biển Malacca','malacca')}${r('Nhật Bản – Micronesia','micronesia')}${r('Biển Nhật Bản','japan')}${r('Bắc Ấn Độ Dương','indian')}
-  <p class="note">Muốn xem nhanh dự báo gió, sóng tại một vị trí cụ thể: nhấn giữ vị trí đó trên hải đồ → "Dự báo gió, sóng tại đây".</p>`); }
+  <p class="note">Muốn xem dự báo gió, sóng hoặc thủy triều tại một vị trí cụ thể: nhấn giữ vị trí đó trên hải đồ → "Dự báo gió, sóng tại đây" hoặc "Thủy triều tại đây".</p>`); }
+/* ================= Thủy triều (Open-Meteo Marine: sea_level_height_msl) ================= */
+let tideData=null;
+function tideExtrema(ts,vs){ const out=[];
+  for(let i=1;i<vs.length-1;i++){ const a=vs[i-1],b=vs[i],c=vs[i+1]; if(a==null||b==null||c==null) continue;
+    const hi=b>a&&b>=c, lo=b<a&&b<=c; if(!hi&&!lo) continue;
+    const den=a-2*b+c, off=den!==0?Math.max(-0.5,Math.min(0.5,0.5*(a-c)/den)):0;     // nội suy parabol để lấy giờ chính xác hơn
+    out.push({t:ts[i]+off*3600000, h:b-0.25*(a-c)*off, hi}); }
+  return out; }
+function tideAt(t){ const d=tideData; if(!d) return null; const i=d.ts.findIndex(x=>x>t); if(i<=0) return null;
+  const a=d.vs[i-1], b=d.vs[i]; if(a==null||b==null) return null; const k=(t-d.ts[i-1])/(d.ts[i]-d.ts[i-1]); return a+(b-a)*k; }
+const hhmm=t=>{ const d=new Date(t); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
+const DOW=['CN','T2','T3','T4','T5','T6','T7'];
+async function showTide(p){ p=p||fix||s2ll(W/2,H/2);
+  openPanel('Thủy triều','<p>Đang tải dữ liệu thủy triều cho '+fmtPos(p)+'…</p>');
+  try{ const r=await fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${p.lat.toFixed(3)}&longitude=${p.lon.toFixed(3)}&hourly=sea_level_height_msl&timezone=auto&timeformat=unixtime&past_days=1&forecast_days=7`).then(r=>r.json());
+    const ts=(r.hourly&&r.hourly.time||[]).map(t=>t*1000), vs=(r.hourly&&r.hourly.sea_level_height_msl)||[];
+    if(!vs.some(v=>v!=null)) throw new Error('nodata');
+    tideData={ts,vs,p,ex:tideExtrema(ts,vs)}; renderTide();
+  }catch(e){ openPanel('Thủy triều',`<p>${e.message==='nodata'?'Không có dữ liệu thủy triều tại điểm này (có thể nằm trên đất liền hoặc trong sông). Hãy chọn một điểm ngoài biển.':'Không tải được dữ liệu thủy triều. Cần có kết nối mạng.'}</p>`); } }
+function renderTide(){ const d=tideData, now=Date.now(), cur=tideAt(now), nx=d.ex.find(e=>e.t>now);
+  const trend=nx?(nx.hi?'đang lên ↑':'đang xuống ↓'):'';
+  let h=`<p>${fmtPos(d.p)}</p>`;
+  if(cur!=null) h+=`<p style="font-size:17px">Mực nước hiện tại: <b>${cur>=0?'+':''}${cur.toFixed(2)} m</b> ${trend}${nx?`<br><span style="font-size:14px">Sắp tới: ${nx.hi?'nước lớn':'nước ròng'} lúc <b>${hhmm(nx.t)}</b> (${nx.h>=0?'+':''}${nx.h.toFixed(2)} m)</span>`:''}</p>`;
+  h+=`<canvas id="tidecv" style="width:100%;height:190px;background:#0b2233;border-radius:10px"></canvas>`;
+  const days={}; for(const e of d.ex){ if(e.t<now-12*3600000) continue; const dt=new Date(e.t), k=dt.toDateString(); (days[k]=days[k]||{dt,list:[]}).list.push(e); }
+  h+='<table class="w"><tr><th>Ngày</th><th>Nước lớn</th><th>Nước ròng</th></tr>';
+  for(const k in days){ const {dt,list}=days[k]; const f=hi=>list.filter(e=>e.hi===hi).map(e=>`${hhmm(e.t)} <b>${e.h>=0?'+':''}${e.h.toFixed(2)}</b>`).join('<br>')||'–';
+    h+=`<tr><td>${DOW[dt.getDay()]} ${dt.getDate()}/${dt.getMonth()+1}</td><td>${f(true)}</td><td>${f(false)}</td></tr>`; }
+  h+=`</table><div class="grid"><button class="b" onclick="showTide(fix)">📍 Tại vị trí tàu</button><button class="b" onclick="closePanel()">Chọn điểm khác</button></div>
+  <p class="note">Nguồn: Open-Meteo Marine (mô hình MeteoFrance SMOC, ô lưới ~8 km). Độ cao tính so với mực nước biển trung bình, không phải số 0 hải đồ. Gần bờ, cửa sông, đầm phá độ chính xác hạn chế – chỉ để tham khảo, không dùng cho hành hải ven bờ. Để chọn điểm khác: đóng bảng, nhấn giữ trên hải đồ → "Thủy triều tại đây".</p>`;
+  openPanel('Thủy triều',h); drawTide(); }
+function drawTide(){ const c=$('tidecv'); if(!c||!tideData) return; const d=tideData, dpr=window.devicePixelRatio||1, w=c.clientWidth, hh=c.clientHeight;
+  c.width=w*dpr; c.height=hh*dpr; const g=c.getContext('2d'); g.scale(dpr,dpr);
+  const now=Date.now(), t0=now-6*3600000, t1=now+66*3600000;           // 3 ngày: 6 giờ trước → 66 giờ sau
+  const pts=d.ts.map((t,i)=>[t,d.vs[i]]).filter(([t,v])=>v!=null&&t>=t0-3600000&&t<=t1+3600000); if(pts.length<2) return;
+  let mn=Math.min(...pts.map(p=>p[1])), mx=Math.max(...pts.map(p=>p[1])); const pad=(mx-mn)*0.15+0.05; mn-=pad; mx+=pad;
+  const L=34,R=6,T=10,B=22, X=t=>L+(t-t0)/(t1-t0)*(w-L-R), Y=v=>T+(mx-v)/(mx-mn)*(hh-T-B);
+  g.font='11px system-ui,sans-serif'; g.fillStyle='#8fb3c9'; g.strokeStyle='rgba(143,179,201,.18)'; g.lineWidth=1;
+  const step=(mx-mn)>3?1:0.5; for(let v=Math.ceil(mn/step)*step; v<=mx; v+=step){ g.beginPath(); g.moveTo(L,Y(v)); g.lineTo(w-R,Y(v)); g.stroke(); g.fillText((v>0?'+':'')+v.toFixed(1),2,Y(v)+4); }
+  for(let t=new Date(t0).setHours(24,0,0,0); t<t1; t+=86400000){ g.beginPath(); g.moveTo(X(t),T); g.lineTo(X(t),hh-B); g.stroke(); const dt=new Date(t); g.fillText(`${DOW[dt.getDay()]} ${dt.getDate()}/${dt.getMonth()+1}`,X(t)+3,hh-6); }
+  g.beginPath(); pts.forEach(([t,v],i)=>i?g.lineTo(X(t),Y(v)):g.moveTo(X(t),Y(v))); g.lineTo(X(pts[pts.length-1][0]),hh-B); g.lineTo(X(pts[0][0]),hh-B); g.closePath();
+  g.fillStyle='rgba(30,136,229,.28)'; g.save(); g.beginPath(); g.rect(L,T,w-L-R,hh-T-B); g.clip();
+  g.beginPath(); pts.forEach(([t,v],i)=>i?g.lineTo(X(t),Y(v)):g.moveTo(X(t),Y(v))); g.lineTo(X(pts[pts.length-1][0]),hh-B); g.lineTo(X(pts[0][0]),hh-B); g.closePath(); g.fill();
+  g.beginPath(); pts.forEach(([t,v],i)=>i?g.lineTo(X(t),Y(v)):g.moveTo(X(t),Y(v))); g.strokeStyle='#4fc3f7'; g.lineWidth=2; g.stroke();
+  for(const e of d.ex){ if(e.t<t0||e.t>t1) continue; g.fillStyle=e.hi?'#ffd54a':'#80cbc4'; g.beginPath(); g.arc(X(e.t),Y(e.h),3,0,7); g.fill();
+    g.fillText(hhmm(e.t),X(e.t)-14,Y(e.h)+(e.hi?-6:14)); }
+  g.restore();
+  g.strokeStyle='#ff5252'; g.lineWidth=1.5; g.beginPath(); g.moveTo(X(now),T); g.lineTo(X(now),hh-B); g.stroke();
+  const cur=tideAt(now); if(cur!=null){ g.fillStyle='#ff5252'; g.beginPath(); g.arc(X(now),Y(cur),4,0,7); g.fill(); } }
+
 async function showPointWeather(p){ p=p||fix||s2ll(W/2,H/2);
   openPanel('Thời tiết biển','<p>Đang tải dự báo cho '+fmtPos(p)+'…</p>');
   try{ const q=`latitude=${p.lat.toFixed(3)}&longitude=${p.lon.toFixed(3)}&timezone=auto&forecast_days=3`;
