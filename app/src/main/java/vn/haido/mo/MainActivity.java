@@ -559,5 +559,17 @@ public class MainActivity extends Activity implements LocationListener {
         @JavascriptInterface public void aisConnect(String host, int port, String proto) { startAis(host, port, "udp".equals(proto)); }
 
         @JavascriptInterface public void aisDisconnect() { stopAis(); aisStatus("Đã ngắt"); }
+
+        @JavascriptInterface public void openUrl(final String url) {
+            if (url == null || !(url.startsWith("https://") || url.startsWith("http://") || url.startsWith("tel:"))) return;
+            ui.post(() -> {
+                try {
+                    Intent i = new Intent(url.startsWith("tel:") ? Intent.ACTION_DIAL : Intent.ACTION_VIEW, Uri.parse(url));
+                    startActivity(i);
+                } catch (Exception e) {
+                    toast("Không mở được liên kết");
+                }
+            });
+        }
     }
 }
