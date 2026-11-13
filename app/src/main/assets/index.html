@@ -56,6 +56,13 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 #banner button{font-size:14px}
 .info p{margin:8px 0}
 #tidebox{position:absolute;left:10px;bottom:52px;background:rgba(8,28,44,.9);color:#eaf2f7;padding:7px 11px;border-radius:18px;font-size:14px;display:none;z-index:4;box-shadow:0 2px 6px rgba(0,0,0,.35);max-width:calc(100% - 90px)}
+@media (min-width:900px){   /* màn hình máy tính: bảng nổi bên trái thay vì trải hết chiều ngang */
+  #panel{left:12px;right:auto;bottom:12px;width:440px;max-height:calc(100% - 130px);border-radius:16px}
+  #modebar{right:auto;width:440px}
+  #popup button:hover,.row:hover{background:rgba(127,160,190,.12)}
+  button.b:hover{filter:brightness(1.15)} .fab:hover{filter:brightness(1.3)}
+  canvas#map{cursor:grab} canvas#map:active{cursor:grabbing}
+}
 #attr{position:absolute;left:6px;bottom:4px;font-size:10px;color:#123;background:rgba(255,255,255,.6);padding:1px 5px;border-radius:4px;z-index:2}
 </style>
 </head>
@@ -96,6 +103,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 'use strict';
 /* ================= Cầu nối với phần Android ================= */
 const NA = window.Android || null;
+const PC = !!window.HD_PC;          // bản Windows
 const store = {
   load(k){ try{ const s = NA ? NA.load(k) : localStorage.getItem('hd_'+k); return s ? JSON.parse(s) : null; }catch(e){ return null; } },
   save(k,v){ const s = JSON.stringify(v); try{ if(NA) NA.save(k,s); else localStorage.setItem('hd_'+k,s); }catch(e){} }
@@ -209,7 +217,7 @@ function moveChart(id,d){ const ids=orderedCharts().map(c=>c.id); const i=ids.in
 function autoOrder(){ delete set.chartOrder; saveSet(); redraw(); showLayers(); }
 
 // chia ô ra 4 địa chỉ nội bộ để vượt giới hạn 6 kết nối/địa chỉ của trình duyệt
-const shard=(x,y)=>NA?`https://m${(x+y)&3}.haido.local`:'';
+const shard=(x,y)=>PC?window.HD_SHARDS[(x+y)&3]:(NA?`https://m${(x+y)&3}.haido.local`:'');
 function activeLayers(){
   const a=[];
   if(set.osm) a.push({id:'osm',min:0,max:19,url:(z,x,y)=> NA ? `/t/osm/${z}/${x}/${y}` : `https://tile.openstreetmap.org/${z}/${x}/${y}.png`});
@@ -634,7 +642,7 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
     (oc.length>1?`<button class="b" ${i===0?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',1)">▲</button><button class="b" ${i===oc.length-1?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',-1)">▼</button>`:'')+
     `<button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa nạp tệp nào.</p>';
   if(oc.length>1) h+=`<p class="note">Tệp ở trên được vẽ đè lên tệp ở dưới. Mặc định app tự xếp tệp chi tiết (zoom cao) lên trên, tệp tổng quát (zoom thấp) xuống dưới, nên khi phóng to thu nhỏ app tự chuyển sang tệp phù hợp. ${set.chartOrder?'<a href="#" onclick="autoOrder();return false" style="color:#7cc4ff">Xếp lại tự động</a>':''}</p>`;
-  h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Nạp tệp .mbtiles (chọn được nhiều tệp)</button></div><p class="note">Chọn nhiều tệp: trong trình chọn tệp, nhấn giữ một tệp rồi chạm thêm các tệp khác, sau đó bấm Chọn/Mở. Hỗ trợ MBTiles dạng ảnh (PNG, JPG, WebP). Tệp được chép vào bộ nhớ riêng của app; sau khi nạp xong có thể xoá tệp gốc.</p>`;
+  h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Nạp tệp .mbtiles (chọn được nhiều tệp)</button></div><p class="note">Chọn nhiều tệp: trong trình chọn tệp, nhấn giữ một tệp rồi chạm thêm các tệp khác, sau đó bấm Chọn/Mở. Hỗ trợ MBTiles dạng ảnh (PNG, JPG, WebP). ${PC?'Trên máy tính, tệp được dùng ngay tại chỗ (không chép); đừng di chuyển hay xoá tệp gốc. Giữ phím Ctrl để chọn nhiều tệp. Nút Xoá chỉ gỡ khỏi danh sách, không xoá tệp.':'Tệp được chép vào bộ nhớ riêng của app; sau khi nạp xong có thể xoá tệp gốc.'}</p>`;
   openPanel('Lớp hải đồ',h); }
 function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
 function zoomChart(id){ const c=charts.find(c=>c.id===id); if(c&&c.bounds){ closePanel(); fitBounds(c.bounds); if(S.zoom<c.minzoom) S.zoom=c.minzoom; redraw(); } }
@@ -810,7 +818,8 @@ function showAisList(){ const arr=[...ais.entries()].filter(([,a])=>a.lat!=null)
     :'<p class="note">Chưa nhận được tàu AIS nào.</p>';
   openPanel(`Tàu AIS xung quanh (${arr.length})`,h+`<div class="grid"><button class="b" onclick="showAis()">← Cài đặt AIS</button></div>`); }
 function showAis(){ openPanel('AIS & GPS tàu qua Wi‑Fi',`<p class="note">Kết nối tới thiết bị trên tàu có Wi‑Fi phát dữ liệu NMEA 0183 (AIS Pilot Plug, bộ thu AIS, máy định vị…). Điện thoại phải vào cùng mạng Wi‑Fi với thiết bị. App đọc tàu AIS xung quanh, GPS tàu (RMC, GGA, VTG), mũi tàu (HDT, HDG, HDM), tốc độ quay trở ROT và độ sâu.</p>
-  Địa chỉ IP thiết bị<input id="ah" type="text" value="${esc(set.ais.host)}">Cổng<input id="ap" type="number" value="${esc(set.ais.port)}">Giao thức<select id="at"><option value="tcp" ${set.ais.proto==='tcp'?'selected':''}>TCP</option><option value="udp" ${set.ais.proto==='udp'?'selected':''}>UDP (chỉ cần cổng)</option></select>
+  ${PC?'Địa chỉ IP thiết bị, hoặc tên cổng COM (vd COM3)':'Địa chỉ IP thiết bị'}<input id="ah" type="text" value="${esc(set.ais.host)}">${PC?'Cổng mạng, hoặc tốc độ baud với cổng COM (GPS thường 4800, AIS 38400)':'Cổng'}<input id="ap" type="number" value="${esc(set.ais.port)}">Giao thức<select id="at"><option value="tcp" ${set.ais.proto==='tcp'?'selected':''}>TCP</option><option value="udp" ${set.ais.proto==='udp'?'selected':''}>UDP (chỉ cần cổng)</option>${PC?`<option value="serial" ${set.ais.proto==='serial'?'selected':''}>Cổng COM (GPS / AIS cắm USB)</option>`:''}</select>
+  ${PC?'<div class="grid"><button class="b" onclick="findCom()">🔌 Tìm cổng COM</button></div><p class="note" id="comlist"></p>':''}
   <div class="grid"><button class="b p" onclick="aisConnect()">Kết nối</button><button class="b r" onclick="NA&&NA.aisDisconnect()">Ngắt</button></div>
   <p id="aisdev" style="line-height:1.6">${devStatus()}</p>
   <div class="grid"><button class="b p" onclick="showAisList()">🚢 Danh sách tàu AIS (${ais.size})</button></div>
@@ -820,6 +829,8 @@ function showAis(){ openPanel('AIS & GPS tàu qua Wi‑Fi',`<p class="note">Kế
    <option value="ship" ${set.posSrc==='ship'?'selected':''}>Chỉ GPS tàu (qua Wi‑Fi)</option>
    <option value="phone" ${set.posSrc==='phone'?'selected':''}>Chỉ GPS của điện thoại / máy tính bảng</option></select>
   <p class="note">GPS tàu có anten đặt ngoài trời nên thường chính xác và ổn định hơn GPS máy. Khi có mũi tàu (HDG), biểu tượng tàu xoay theo mũi tàu kể cả khi đứng yên; khi có ROT, app vẽ đường cong dự báo 10 phút tới.</p>`); }
+function findCom(){ let l=[]; try{ l=JSON.parse(NA.listSerial()); }catch(e){}
+  $('comlist').innerHTML=l.length?'Có các cổng: '+l.map(c=>`<a href="#" style="color:#7cc4ff" onclick="$('ah').value='${esc(c.port)}';$('at').value='serial';return false">${esc(c.port)}</a> (${esc(c.desc)})`).join(', ')+'. Bấm tên cổng để chọn.':'Không thấy cổng COM nào. Kiểm tra đã cắm thiết bị và cài driver.'; }
 function aisConnect(){ set.ais={host:$('ah').value.trim(),port:parseInt($('ap').value)||10110,proto:$('at').value}; saveSet(); if(NA) NA.aisConnect(set.ais.host,set.ais.port,set.ais.proto); else toast('Chỉ dùng được trong app Android'); }
 
 /* ================= GPX ================= */
@@ -851,7 +862,7 @@ function showMenu(){ openPanel('Chức năng',`<div class="grid">
   <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem dự báo tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
 function showGpx(){ openPanel('Nhập / Xuất GPX',`<div class="grid"><button class="b p" onclick="NA?NA.importGpx():toast('Chỉ dùng được trong app Android')">⬇ Nhập tệp GPX</button><button class="b p" onclick="exportGpx()">⬆ Xuất tệp GPX</button></div>
   <p class="note"><b>Nhập:</b> thêm điểm, tuyến, vết từ tệp .gpx (từ máy định vị, Navionics, OpenCPN…) vào app, không xoá dữ liệu đang có.<br><b>Xuất:</b> lưu toàn bộ ${wpts.length} điểm, ${routes.length} tuyến, ${tracks.length} vết ra một tệp .gpx để sao lưu hoặc chuyển sang máy khác.</p>`); }
-function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-size:18px"><b>Hải đồ VN</b> · phiên bản ${APP_VER}</p>
+function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-size:18px"><b>Hải đồ VN</b> · phiên bản ${APP_VER}${PC?' · Windows':''}</p>
   <p>Phần mềm tạo bởi <b>Mr Công</b><br>📞 <b>0586 568 569</b></p>
   <p>Chuyên cung cấp:<br>• Phần mềm hàng hải<br>• Máy tính bảng, iPad đi biển<br>• AIS Pilot Plug Wi‑Fi và thiết bị AIS<br>• Lắp đặt, hướng dẫn sử dụng…</p>
   <div class="grid"><button class="b p" onclick="openUrl('tel:0586568569')">📞 Gọi điện</button><button class="b p" onclick="openUrl('https://zalo.me/0586568569')">💬 Nhắn Zalo</button></div>
