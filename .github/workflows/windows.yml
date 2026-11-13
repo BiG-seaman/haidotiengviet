@@ -1,0 +1,39 @@
+name: Build Windows (HaiDoVN.exe)
+on:
+  push:
+    paths:
+      - 'pc/**'
+      - 'app/src/main/assets/index.html'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pywebview pyserial pyinstaller pillow
+      - name: Chuan bi giao dien va bieu tuong
+        shell: bash
+        run: |
+          cp app/src/main/assets/index.html pc/web/index.html
+          python pc/make_icon.py pc/icon.ico
+      - name: Dong goi HaiDoVN.exe
+        run: pyinstaller --noconfirm --windowed --name HaiDoVN --icon pc/icon.ico --add-data "pc/web;web" --collect-all webview --collect-all clr_loader --collect-all pythonnet --hidden-import serial.tools.list_ports pc/app.py
+      - name: Tu kiem tra ban dong goi
+        shell: pwsh
+        run: |
+          $env:HAIDOVN_HOME = "$env:RUNNER_TEMP\hdtest"
+          $p = Start-Process -FilePath dist\HaiDoVN\HaiDoVN.exe -ArgumentList '--selftest' -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\hdtest\selftest.txt"
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Them huong dan
+        shell: bash
+        run: cp pc/HUONG_DAN.txt dist/HaiDoVN/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HaiDoVN-Windows
+          path: dist/HaiDoVN
+          retention-days: 30
