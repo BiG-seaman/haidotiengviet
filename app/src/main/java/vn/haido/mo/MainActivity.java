@@ -95,6 +95,7 @@ public class MainActivity extends Activity implements LocationListener {
         super.onCreate(b);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         loadCharts();
+        installDefaultChart();
 
         web = new WebView(this);
         setContentView(web);
@@ -306,6 +307,52 @@ public class MainActivity extends Activity implements LocationListener {
         if (d == null) d = new File(getFilesDir(), "charts");
         d.mkdirs();
         return d;
+    }
+
+    // Hải đồ nền mặc định đóng gói sẵn trong bản cài (assets/default.mbtiles): chép ra và bật một lần sau khi cài
+    void installDefaultChart() {
+        final File flag = new File(getFilesDir(), "default_chart_installed");
+        if (flag.exists()) return;
+        String[] names;
+        try { names = getAssets().list(""); } catch (Exception e) { return; }
+        boolean has = false;
+        if (names != null) for (String n : names) if ("default.mbtiles".equals(n)) has = true;
+        if (!has) return;
+        new Thread(() -> {
+            String id = "Hải đồ nền";
+            File out = new File(chartDir(), id + ".mbtiles");
+            File tmp = new File(chartDir(), id + ".mbtiles.part");
+            try {
+                toast("Đang cài hải đồ nền mặc định…");
+                long size = -1;
+                try { size = getAssets().openFd("default.mbtiles").getLength(); } catch (Exception ignored) {}
+                InputStream in = getAssets().open("default.mbtiles");
+                OutputStream o = new FileOutputStream(tmp);
+                byte[] buf = new byte[1 << 20];
+                long done = 0;
+                int n, lastPct = -1;
+                while ((n = in.read(buf)) > 0) {
+                    o.write(buf, 0, n);
+                    done += n;
+                    if (size > 0) {
+                        int pct = (int) (done * 100 / size);
+                        if (pct != lastPct && pct % 5 == 0) { lastPct = pct; js("window.onImportProgress&&onImportProgress(" + pct + "," + JSONObject.quote("hải đồ nền") + ")"); }
+                    }
+                }
+                o.close();
+                in.close();
+                if (out.exists()) out.delete();
+                if (!tmp.renameTo(out)) throw new Exception("rename");
+                if (openChart(out)) {
+                    flag.createNewFile();
+                    toast("Đã cài hải đồ nền mặc định");
+                    js("window.onChartsChanged&&onChartsChanged(" + JSONObject.quote(id) + ")");
+                }
+            } catch (Exception e) {
+                tmp.delete();
+                toast("Không cài được hải đồ nền (kiểm tra dung lượng trống)");
+            }
+        }).start();
     }
 
     void loadCharts() {
