@@ -413,6 +413,23 @@ public class MainActivity extends Activity implements LocationListener {
                 } catch (Exception ignored) {}
             }
             try { Cursor pc = db.rawQuery("PRAGMA mmap_size=268435456", null); pc.moveToFirst(); pc.close(); } catch (Exception ignored) {}
+            if (!o.has("bounds")) {   // tệp không ghi vùng phủ: tính từ các ô ở mức zoom nhỏ nhất
+                try {
+                    Cursor bc = db.rawQuery("SELECT MIN(tile_column), MAX(tile_column), MIN(tile_row), MAX(tile_row) FROM tiles WHERE zoom_level=" + minz, null);
+                    if (bc.moveToFirst() && !bc.isNull(0)) {
+                        int n2 = 1 << minz;
+                        double x0 = bc.getInt(0), x1 = bc.getInt(1) + 1;
+                        double y0 = n2 - 1 - bc.getInt(3), y1 = n2 - bc.getInt(2);
+                        JSONArray a = new JSONArray();
+                        a.put(x0 / n2 * 360 - 180);
+                        a.put(Math.toDegrees(Math.atan(Math.sinh(Math.PI * (1 - 2 * y1 / n2)))));
+                        a.put(x1 / n2 * 360 - 180);
+                        a.put(Math.toDegrees(Math.atan(Math.sinh(Math.PI * (1 - 2 * y0 / n2)))));
+                        o.put("bounds", a);
+                    }
+                    bc.close();
+                } catch (Exception ignored) {}
+            }
             dbs.put(id, db);
             infos.put(id, o);
             SQLiteDatabase[] pool = new SQLiteDatabase[POOL];
