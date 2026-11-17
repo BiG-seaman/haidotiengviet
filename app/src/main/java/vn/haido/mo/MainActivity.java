@@ -345,6 +345,7 @@ public class MainActivity extends Activity implements LocationListener {
                 if (!tmp.renameTo(out)) throw new Exception("rename");
                 if (openChart(out)) {
                     flag.createNewFile();
+                    new File(getFilesDir(), "default_chart_shown2").createNewFile();
                     toast("Đã cài hải đồ nền mặc định");
                     js("window.onChartsChanged&&onChartsChanged(" + JSONObject.quote(id) + ")");
                 }
@@ -398,7 +399,10 @@ public class MainActivity extends Activity implements LocationListener {
             JSONObject o = new JSONObject();
             o.put("id", id);
             String name = meta.get("name");
-            o.put("name", name == null || name.trim().isEmpty() ? id : name.trim());
+            String nm = name == null ? "" : name.trim();
+            if (nm.isEmpty() || nm.equalsIgnoreCase("unnamed map") || nm.equalsIgnoreCase("untitled") || nm.equalsIgnoreCase("map")) nm = id;   // SAS Planet hay ghi "Unnamed map"
+            if ("Hải đồ nền".equals(id)) nm = "Hải đồ nền";
+            o.put("name", nm);
             o.put("minzoom", minz);
             o.put("maxzoom", maxz);
             o.put("format", fmt);
@@ -413,11 +417,14 @@ public class MainActivity extends Activity implements LocationListener {
                 } catch (Exception ignored) {}
             }
             try { Cursor pc = db.rawQuery("PRAGMA mmap_size=268435456", null); pc.moveToFirst(); pc.close(); } catch (Exception ignored) {}
-            if (!o.has("bounds")) {   // tệp không ghi vùng phủ: tính từ các ô ở mức zoom nhỏ nhất
-                try {
-                    Cursor bc = db.rawQuery("SELECT MIN(tile_column), MAX(tile_column), MIN(tile_row), MAX(tile_row) FROM tiles WHERE zoom_level=" + minz, null);
+            // Vùng phủ tính từ dữ liệu thật (SAS Planet và một số công cụ ghi sai vùng phủ trong metadata):
+            // dùng mức zoom lớn nhất có dữ liệu trong khoảng <= 10
+            try {
+                for (int z = Math.min(maxz, 10); z >= minz; z--) {
+                    Cursor bc = db.rawQuery("SELECT MIN(tile_column), MAX(tile_column), MIN(tile_row), MAX(tile_row) FROM tiles WHERE zoom_level=" + z, null);
+                    boolean found = false;
                     if (bc.moveToFirst() && !bc.isNull(0)) {
-                        int n2 = 1 << minz;
+                        int n2 = 1 << z;
                         double x0 = bc.getInt(0), x1 = bc.getInt(1) + 1;
                         double y0 = n2 - 1 - bc.getInt(3), y1 = n2 - bc.getInt(2);
                         JSONArray a = new JSONArray();
@@ -426,10 +433,12 @@ public class MainActivity extends Activity implements LocationListener {
                         a.put(x1 / n2 * 360 - 180);
                         a.put(Math.toDegrees(Math.atan(Math.sinh(Math.PI * (1 - 2 * y0 / n2)))));
                         o.put("bounds", a);
+                        found = true;
                     }
                     bc.close();
-                } catch (Exception ignored) {}
-            }
+                    if (found) break;
+                }
+            } catch (Exception ignored) {}
             dbs.put(id, db);
             infos.put(id, o);
             SQLiteDatabase[] pool = new SQLiteDatabase[POOL];
@@ -683,7 +692,14 @@ public class MainActivity extends Activity implements LocationListener {
             return new File(d, key.replaceAll("[^a-zA-Z0-9_]", "_") + ".json");
         }
 
-        @JavascriptInterface public void ready() {}
+        @JavascriptInterface public void ready() {
+            // máy đã cài hải đồ nền bằng bản trước (vùng phủ sai): đưa bản đồ tới đúng vùng một lần
+            File shown = new File(getFilesDir(), "default_chart_shown2");
+            if (!shown.exists() && infos.containsKey("Hải đồ nền")) {
+                try { shown.createNewFile(); } catch (Exception ignored) {}
+                ui.postDelayed(() -> js("window.onChartsChanged&&onChartsChanged(" + JSONObject.quote("Hải đồ nền") + ")"), 800);
+            }
+        }
 
         @JavascriptInterface public String load(String key) {
             try {
