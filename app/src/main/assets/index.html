@@ -83,9 +83,10 @@ table.w td:first-child,table.w th:first-child{text-align:left}
   <div id="navrow">
     <div><span class="l" id="navname">ĐẾN</span></div>
     <div><span class="l">P.VỊ</span><span class="v" id="nbrg">--</span><span class="l">°</span></div>
-    <div><span class="l">CÒN</span><span class="v" id="ndst">--</span> <span class="l">nm</span></div>
+    <div><span class="l">K.CÁCH</span><span class="v" id="ndst">--</span> <span class="l">nm</span></div>
     <div><span class="l">LỆCH</span><span class="v" id="nxte">--</span></div>
-    <div><span class="l">T.GIAN</span><span class="v" id="nttg">--</span></div>
+    <div><span class="l">CÒN</span><span class="v" id="nttg">--</span></div>
+    <div><span class="l">ĐẾN LÚC</span><span class="v" id="neta">--</span></div>
     <button class="b r" style="margin-left:auto;padding:6px 10px" onclick="stopNav()">Dừng</button>
   </div>
 </div>
@@ -123,9 +124,9 @@ let wpts   = store.load('wpts')   || [];
 let routes = store.load('routes') || [];
 let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
-                         alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
+                         alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name', planKn:6,
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.12';
+const APP_VER='1.13';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -148,6 +149,10 @@ function xteNm(a,b,p){ const d13=distNm(a,p)/R_NM, t13=bearing(a,p)*D2R, t12=bea
 const fmtNm = d => d<0.1 ? Math.round(d*1852)+' m' : (d<10?d.toFixed(2):d.toFixed(1))+' nm';
 const fmt3 = d => String(Math.round(d)%360).padStart(3,'0');
 function fmtDur(h){ if(!isFinite(h)) return '--'; const m=Math.round(h*60); return m<60 ? m+'ph' : Math.floor(m/60)+'g'+String(m%60).padStart(2,'0'); }
+function fmtDurL(h){ if(!isFinite(h)||h<0) return '--'; const m=Math.round(h*60), d=Math.floor(m/1440), g=Math.floor(m%1440/60), p=m%60;
+  return (d?d+' ngày ':'')+(d||g?g+' giờ ':'')+p+' phút'; }
+function fmtClock(h){ if(!isFinite(h)||h<0) return '--'; const t=new Date(Date.now()+h*3600000), n=new Date(), pad=x=>String(x).padStart(2,'0');
+  const hm=pad(t.getHours())+':'+pad(t.getMinutes()); return t.toDateString()===n.toDateString()?hm:hm+' '+pad(t.getDate())+'/'+pad(t.getMonth()+1); }
 function pathNm(pts){ let d=0; for(let i=1;i<pts.length;i++) d+=distNm(pts[i-1],pts[i]); return d; }
 
 /* ================= Phép chiếu Mercator ================= */
@@ -407,7 +412,7 @@ function wptPopup(w,x,y){ let s=fmtPos(w); if(fix) s+='<br>Cách tàu '+fmtNm(di
   showPopup(x,y,esc(w.name),s,[ ['🧭 Đi tới điểm này',()=>startNav(w.name,[w])], ['✏️ Sửa tên, toạ độ',()=>editWpt(w.id)], ['🗑 Xoá',()=>delWpt(w.id)] ]); }
 
 /* ================= Hộp thoại, thông báo ================= */
-let toastT=null; function toast(m){ const t=$('toast'); t.textContent=m; t.style.display='block'; clearTimeout(toastT); toastT=setTimeout(()=>t.style.display='none',2800); }
+let toastT=null; function toast(m){ const t=$('toast'); t.textContent=m; t.style.display='block'; clearTimeout(toastT); toastT=setTimeout(()=>t.style.display='none',Math.max(2800,String(m).length*55)); }
 let modalCb=null;
 function ask(title,def,cb,type){ modalCb=cb; $('modal').innerHTML=`<div class="box"><b>${esc(title)}</b><input id="mi" type="${type||'text'}" value="${esc(def)}"><div class="acts"><button class="b" onclick="closeModal()">Huỷ</button><button class="b p" onclick="okModal()">Đồng ý</button></div></div>`;
   $('modal').style.display='flex'; setTimeout(()=>{ const i=$('mi'); i.focus(); i.select&&i.select(); },50); }
@@ -426,10 +431,39 @@ let phoneFix=null, shipFix=null;
 const ship={sog:null,sogT:0,cog:null,cogT:0,hdg:null,hdgT:0,rot:null,rotT:0,depth:null,depthT:0,magvar:null,nmeaT:0,applyT:0};
 const nmeaCount={gps:0,hdg:0,ais:0};
 const fresh=(t,ms)=>t&&Date.now()-t<ms;
-function curSrc(){ if(set.posSrc==='phone') return 'phone'; if(set.posSrc==='ship') return 'ship'; return shipFix&&fresh(shipFix.t,5000)?'ship':'phone'; }
+/* Chọn nguồn (chế độ Tự động): ưu tiên GPS tàu. Chỉ chuyển sang GPS tàu khi đã nhận liên tục >=3 vị trí tốt,
+   chỉ bỏ GPS tàu khi mất tín hiệu quá 8 giây → không nhảy qua lại giữa hai nguồn. */
+let autoSrc='phone';
+function curSrc(){ if(set.posSrc==='phone') return 'phone'; if(set.posSrc==='ship') return 'ship';
+  if(autoSrc==='ship'){ if(!(shipFix&&fresh(shipFix.t,8000))) autoSrc='phone'; }
+  else if(shipFix&&fresh(shipFix.t,3000)&&shipFix.good>=3) autoSrc='ship';
+  return autoSrc; }
+/* Bộ lọc vị trí: loại điểm nhảy bất thường, làm mượt vị trí/tốc độ/hướng đi để vị trí và hướng tàu ổn định. */
+const gpsF={phone:{rej:0},ship:{rej:0}};
+function circMix(a,b,k){ if(a==null) return b; if(b==null) return a; let d=((b-a+540)%360)-180; return (a+d*k+360)%360; }
+function smoothFix(src,m,prev){ const st=gpsF[src];
+  if(!prev||m.t-prev.t>15000){ st.rej=0; m.good=1; return m; }
+  const dt=Math.max(0.2,(m.t-prev.t)/1000), dm=distNm(prev,m)*1852;
+  const vmax=(Math.max(m.sog||0,prev.sog||0)*1.6+12)*0.514444;               // m/giây cho phép
+  const slack=(m.acc>0?m.acc:6)+(prev.acc>0?prev.acc:6);
+  if(dm>vmax*dt+slack*1.5&&++st.rej<4) return null;                            // điểm nhảy: bỏ (tối đa 3 lần liên tiếp)
+  st.rej=0;
+  // dự đoán theo tốc độ/hướng đi trước đó rồi trộn với số đo; số đo càng chính xác càng tin số đo
+  let k=m.acc>0?Math.min(0.9,Math.max(0.35,1-m.acc/60)):0.85;
+  const still=(m.sog||0)<0.4&&(prev.sog||0)<0.4;
+  if(still&&dm<slack) k=Math.min(k,0.25);                                     // tàu đứng yên: không để vị trí "bò" lung tung
+  let plat=prev.lat, plon=prev.lon;
+  if(!still&&prev.cog!=null&&prev.sog>0.4){ const dn=prev.sog*dt/3600; plat+=dn/60*Math.cos(prev.cog*Math.PI/180); plon+=dn/60*Math.sin(prev.cog*Math.PI/180)/Math.cos(prev.lat*Math.PI/180); }
+  const sog=prev.sog==null?m.sog:prev.sog+(m.sog-prev.sog)*0.5;
+  let cog=prev.cog; if(m.cog!=null&&m.sog>0.4) cog=Math.abs(((m.cog-(prev.cog==null?m.cog:prev.cog)+540)%360)-180)>40?m.cog:circMix(prev.cog,m.cog,0.5);
+  return {lat:plat+(m.lat-plat)*k, lon:plon+(m.lon-plon)*k, sog, cog, acc:m.acc, t:m.t, good:Math.min(99,(prev.good||0)+1)}; }
+let phoneSats=null;
+window.onSats=function(used,seen){ phoneSats={used,seen,t:Date.now()}; };
 window.onGps=function(lat,lon,spd,brg,acc,t){
   const sog=(spd>=0?spd:0)*1.943844;
-  phoneFix={lat,lon,sog,cog:(brg>=0&&sog>0.3)?brg:(phoneFix?phoneFix.cog:null),acc,t:Date.now()};
+  if(acc>0&&acc>150&&phoneFix&&fresh(phoneFix.t,10000)) return;              // điểm quá kém khi đang có điểm tốt
+  const m={lat,lon,sog,cog:(brg>=0&&sog>0.4)?brg:null,acc,t:Date.now()};
+  const r=smoothFix('phone',m,phoneFix); if(!r) return; if(r.cog==null&&phoneFix) r.cog=phoneFix.cog; phoneFix=r;
   if(curSrc()==='phone') applyFix(); };
 function applyFix(){ const src=curSrc(), f=src==='ship'?shipFix:phoneFix;
   if(!f){ fix=null; updTop(); redraw(); return; }
@@ -443,7 +477,8 @@ function applyFix(){ const src=curSrc(), f=src==='ship'?shipFix:phoneFix;
 function updTop(){ const show=(id,on)=>{ $(id).style.display=on?'':'none'; };
   if(!fix){ $('sog').textContent='--'; $('cog').textContent='--'; $('pos').textContent=curSrc()==='ship'?'Chưa có GPS tàu':'Chưa có GPS'; $('srctag').textContent=''; }
   else { $('sog').textContent=fix.sog.toFixed(1); $('cog').textContent=fix.cog!=null?fmt3(fix.cog):'--'; $('pos').innerHTML=fmtPos2(fix);
-    const stale=!fresh(fix.t,6000); $('srctag').innerHTML=(fix.src==='ship'?'GPS<br>TÀU':'GPS<br>MÁY')+(stale?'<br>⚠ MẤT':''); $('srctag').style.color=stale?'#ff8a80':''; }
+    const stale=!fresh(fix.t,6000), sv=satInfo(fix.src);
+    $('srctag').innerHTML=(fix.src==='ship'?'GPS<br>TÀU':'GPS<br>MÁY')+(stale?'<br>⚠ MẤT':sv?'<br>'+sv.n+' VT':''); $('srctag').style.color=stale?'#ff8a80':''; }
   const h=fresh(ship.hdgT,10000), r=fresh(ship.rotT,10000), d=fresh(ship.depthT,10000);
   show('bhdg',h); if(h) $('hdg').textContent=fmt3(ship.hdg);
   show('brot',r); if(r) $('rot').textContent=(ship.rot>0?'+':'')+ship.rot.toFixed(Math.abs(ship.rot)<10?1:0);
@@ -456,9 +491,15 @@ function shipPos(lat,lon,sog,cog,kind){ const now=Date.now();
   if(kind==='vdo'&&fresh(ship.nmeaT,5000)) return;   // có câu GPS chuẩn thì ưu tiên câu GPS
   if(kind!=='vdo') ship.nmeaT=now; nmeaCount.gps++;
   const s=fresh(ship.sogT,5000)?ship.sog:0, c=fresh(ship.cogT,5000)?ship.cog:null;
-  shipFix={lat,lon,sog:s,cog:(c!=null&&s>0.3)?c:(shipFix?shipFix.cog:null),acc:-1,t:now};
+  if(shipFix&&now-shipFix.t<300){                                               // cùng một lần đo (GGA + RMC): chỉ cập nhật tốc độ/hướng đi
+    if(sog!=null) shipFix.sog=s; if(c!=null&&s>0.4) shipFix.cog=shipFix.cog==null?c:circMix(shipFix.cog,c,0.5); return; }
+  const m={lat,lon,sog:s,cog:(c!=null&&s>0.4)?c:null,acc:fresh(ship.hdopT,10000)&&ship.hdop>0?ship.hdop*4:-1,t:now};
+  const r=smoothFix('ship',m,shipFix); if(!r) return; if(r.cog==null&&shipFix) r.cog=shipFix.cog; shipFix=r;
   if(curSrc()==='ship'&&now-ship.applyT>=300){ ship.applyT=now; applyFix(); } }
-function setHdg(h,kind){ if(!isFinite(h)) return; ship.hdg=((h%360)+360)%360; ship.hdgT=Date.now(); ship.hdgKind=kind; nmeaCount.hdg++; if(fix){ fix.hdg=ship.hdg; redraw(); } }
+function setHdg(h,kind){ if(!isFinite(h)) return; h=((h%360)+360)%360;
+  // làm mượt mũi tàu (la bàn hay rung); quay nhanh > 25° thì theo ngay
+  const d=ship.hdg==null||!fresh(ship.hdgT,5000)?999:Math.abs(((h-ship.hdg+540)%360)-180);
+  ship.hdg=d>25?h:circMix(ship.hdg,h,0.45); ship.hdgT=Date.now(); ship.hdgKind=kind; nmeaCount.hdg++; if(fix){ fix.hdg=ship.hdg; redraw(); } }
 function nmeaLL(v,h){ if(!v) return null; const p=v.indexOf('.'), dl=(p<0?v.length:p)-2; if(dl<1) return null;
   const d=parseInt(v.slice(0,dl),10), m=parseFloat(v.slice(dl)); if(!isFinite(d)||!isFinite(m)||m>=60) return null;
   const x=d+m/60; return (h==='S'||h==='W')?-x:x; }
@@ -468,7 +509,10 @@ function parseNmea0183(line){ const f=line.split('*')[0].split(','), t=f[0].slic
   switch(t){
     case 'RMC': { if(f[2]!=='A') return; const lat=nmeaLL(f[3],f[4]), lon=nmeaLL(f[5],f[6]); if(lat==null||lon==null) return;
       const mv=num(f[10]); if(mv!=null) ship.magvar=f[11]==='W'?-mv:mv; shipPos(lat,lon,num(f[7]),num(f[8]),'rmc'); break; }
-    case 'GGA': { if(!(+f[6]>0)) return; const lat=nmeaLL(f[2],f[3]), lon=nmeaLL(f[4],f[5]); if(lat!=null&&lon!=null) shipPos(lat,lon,null,null,'gga'); break; }
+    case 'GGA': { if(!(+f[6]>0)) return; const ns=num(f[7]), hd=num(f[8]); if(ns!=null){ ship.sats=ns; ship.satsT=now; } if(hd!=null){ ship.hdop=hd; ship.hdopT=now; }
+      if(hd!=null&&hd>20) return;                                                   // sai số quá lớn: bỏ
+      const lat=nmeaLL(f[2],f[3]), lon=nmeaLL(f[4],f[5]); if(lat!=null&&lon!=null) shipPos(lat,lon,null,null,'gga'); break; }
+    case 'GSA': { const hd=num(f[16]); if(hd!=null){ ship.hdop=hd; ship.hdopT=now; } break; }
     case 'GLL': { if(f[6]&&f[6]!=='A') return; const lat=nmeaLL(f[1],f[2]), lon=nmeaLL(f[3],f[4]); if(lat!=null&&lon!=null) shipPos(lat,lon,null,null,'gll'); break; }
     case 'VTG': { const c=num(f[1]), s=num(f[5]); if(s!=null){ ship.sog=s; ship.sogT=now; } if(c!=null){ ship.cog=c; ship.cogT=now; } break; }
     case 'HDT': case 'THS': { const h=num(f[1]); if(h!=null&&f[2]!=='V') setHdg(h,'nmea'); break; }
@@ -483,11 +527,14 @@ function ownAis(r){ const now=Date.now();
   if(r.hdg!=null&&!(ship.hdgKind==='nmea'&&fresh(ship.hdgT,3000))) setHdg(r.hdg,'vdo');
   if(r.rot!=null&&!(ship.rotKind==='nmea'&&fresh(ship.rotT,3000))){ ship.rot=r.rot; ship.rotT=now; ship.rotKind='vdo'; }
   if(r.lat!=null) shipPos(r.lat,r.lon,r.sog!=null?r.sog:null,r.cog!=null?r.cog:null,'vdo'); }
+function satInfo(src){ if(src==='ship') return fresh(ship.satsT,10000)?{n:ship.sats,hdop:fresh(ship.hdopT,10000)?ship.hdop:null}:null;
+  return phoneSats&&fresh(phoneSats.t,10000)?{n:phoneSats.used,seen:phoneSats.seen}:null; }
 function devStatus(){ const age=t=>t?Math.round((Date.now()-t)/1000)+' giây trước':'chưa nhận';
   return `Kết nối: <b>${esc(aisStatus)}</b><br>GPS tàu: <b>${shipFix?(fresh(shipFix.t,6000)?'đang nhận':'mất tín hiệu'):'chưa nhận'}</b> (${age(shipFix&&shipFix.t)})<br>`+
     `Mũi tàu HDG: <b>${fresh(ship.hdgT,10000)?fmt3(ship.hdg)+'°':'--'}</b> · ROT: <b>${fresh(ship.rotT,10000)?ship.rot.toFixed(1)+'°/phút':'--'}</b>`+
     (fresh(ship.depthT,10000)?` · Độ sâu: <b>${ship.depth.toFixed(1)} m</b>`:'')+
-    `<br>Đang dùng vị trí: <b>${fix?(fix.src==='ship'?'GPS tàu':'GPS máy'):'chưa có'}</b> · Tàu AIS: <b>${ais.size}</b>`; }
+    `<br>Đang dùng vị trí: <b>${fix?(fix.src==='ship'?'GPS tàu':'GPS máy'):'chưa có'}</b> · Tàu AIS: <b>${ais.size}</b>`+
+    (()=>{ const a=satInfo('ship'), b=satInfo('phone'); return (a?`<br>Vệ tinh GPS tàu: <b>${a.n}</b>${a.hdop!=null?' · HDOP <b>'+a.hdop.toFixed(1)+'</b>':''}`:'')+(b?`<br>Vệ tinh GPS máy: <b>${b.n}</b> đang dùng / ${b.seen} thấy được`:''); })(); }
 function toggleFollow(){ follow=!follow; if(follow){ if(fix){ S.cx=lon2x(fix.lon); S.cy=lat2y(fix.lat); if(S.zoom<10) S.zoom=13; redraw(); } else toast('Đang chờ tín hiệu GPS…'); } updFollow(); }
 function updFollow(){ $('bfollow').classList.toggle('on',follow); }
 
@@ -524,7 +571,7 @@ function startMode(m){ closePanel(); hidePopup(); mode=m; modePts=[]; updMode();
 function endMode(){ mode=null; modePts=[]; $('modebar').style.display='none'; redraw(); }
 function undoMode(){ modePts.pop(); updMode(); redraw(); }
 function updMode(){ const b=$('modebar'); if(!mode){ b.style.display='none'; return; }
-  const d=pathNm(modePts); const info=modePts.length?`${modePts.length} điểm · tổng ${fmtNm(d)}`:'Chạm lên hải đồ để thêm điểm';
+  const d=pathNm(modePts); const info=modePts.length?`${modePts.length} điểm · tổng ${fmtNm(d)}${modePts.length>1?' · ≈ '+fmtDurL(d/(+set.planKn||6)):''}`:'Chạm lên hải đồ để thêm điểm';
   b.innerHTML=`<div style="margin-bottom:8px"><b>${mode==='measure'?'📏 Đo khoảng cách':'〰 Tạo tuyến'}</b> — ${info}</div><div style="display:flex;gap:8px">`+
     `<button class="b" onclick="undoMode()">Hoàn tác</button>`+(mode==='route'?`<button class="b p" onclick="saveRoute()">Lưu tuyến</button>`:'')+`<button class="b r" onclick="endMode()">${mode==='route'?'Huỷ':'Xong'}</button></div>`;
   b.style.display='block'; }
@@ -536,7 +583,7 @@ function routeEntry(){ rdraft={name:'Tuyến '+(routes.length+1),pts:[]}; showRo
 function showRouteEntry(){ const d=rdraft;
   let h=`Tên tuyến<input id="rn" type="text" value="${esc(d.name)}">`;
   h+=d.pts.length?d.pts.map((p,i)=>`<div class="row"><div class="g"><b>Điểm ${i+1}</b><small>${fmtPos(p)}${i?'<br>'+fmtNm(distNm(d.pts[i-1],p))+' · hướng '+fmt3(bearing(d.pts[i-1],p))+'°':''}</small></div><button class="b r" onclick="delRoutePt(${i})">Xoá</button></div>`).join(''):'<p class="note">Chưa có điểm nào. Nhập toạ độ bên dưới rồi bấm "Thêm điểm".</p>';
-  if(d.pts.length>1) h+=`<p><b>Tổng chiều dài: ${fmtNm(pathNm(d.pts))}</b></p>`;
+  if(d.pts.length>1) h+=`<p><b>Tổng chiều dài: ${fmtNm(pathNm(d.pts))}</b> · ≈ ${fmtDurL(pathNm(d.pts)/(+set.planKn||6))} ở ${+set.planKn||6} kn</p>`;
   h+=`<h3>Thêm điểm ${d.pts.length+1}</h3>${coordForm('rc',d.pts[d.pts.length-1])}<div class="grid"><button class="b" onclick="addRoutePt()">＋ Thêm điểm</button><button class="b p" onclick="saveRouteEntry()">💾 Lưu tuyến</button></div>`;
   openPanel('Nhập tuyến bằng toạ độ',h); }
 function addRoutePt(){ const p=readCoord('rc'); if(!p) return; rdraft.name=$('rn').value; rdraft.pts.push(p); showRouteEntry();
@@ -545,7 +592,8 @@ function delRoutePt(i){ rdraft.name=$('rn').value; rdraft.pts.splice(i,1); showR
 function saveRouteEntry(){ rdraft.name=$('rn').value.trim()||rdraft.name; if(rdraft.pts.length<2){ toast('Tuyến cần ít nhất 2 điểm'); return; }
   const r={id:uid(),name:rdraft.name,pts:rdraft.pts}; routes.push(r); store.save('routes',routes); rdraft=null; toast('Đã lưu tuyến'); fitPts(r.id,'r'); }
 function showRoutes(){ let h=`<div class="grid"><button class="b p" onclick="startMode('route')">👆 Đánh dấu trên hải đồ</button><button class="b p" onclick="routeEntry()">⌨ Nhập toạ độ từng điểm</button></div>`;
-  h+=routes.length?routes.map(r=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${r.show!==false?'checked':''} onchange="togRoute('${r.id}',this.checked)"><div class="g" onclick="fitPts('${r.id}','r')"><b>${esc(r.name)}</b><small>${r.pts.length} điểm · ${fmtNm(pathNm(r.pts))}</small></div><button class="b" onclick="navRoute('${r.id}')">Chạy</button><button class="b" onclick="navRoute('${r.id}',1)">Ngược</button><button class="b r" onclick="delRoute('${r.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có tuyến nào.</p>';
+  h+=`<label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">Tốc độ dự kiến <input type="number" inputmode="decimal" min="0.5" max="60" step="0.5" value="${+set.planKn||6}" style="width:80px" onchange="const v=parseFloat(this.value);if(v>0){set.planKn=v;saveSet();showRoutes();}"> kn</label><p class="note" style="margin-top:0">Dùng để tính thời gian khi lập tuyến, và khi tàu đang đứng yên. Lúc chạy, thời gian dự kiến tính theo tốc độ trung bình thực tế.</p>`;
+  h+=routes.length?routes.map(r=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${r.show!==false?'checked':''} onchange="togRoute('${r.id}',this.checked)"><div class="g" onclick="fitPts('${r.id}','r')"><b>${esc(r.name)}</b><small>${r.pts.length} điểm · ${fmtNm(pathNm(r.pts))} · ≈ ${fmtDurL(pathNm(r.pts)/(+set.planKn||6))} ở ${+set.planKn||6} kn</small></div><button class="b" onclick="navRoute('${r.id}')">Chạy</button><button class="b" onclick="navRoute('${r.id}',1)">Ngược</button><button class="b r" onclick="delRoute('${r.id}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có tuyến nào.</p>';
   openPanel('Tuyến đường',h); }
 function togRoute(id,v){ const r=routes.find(r=>r.id===id); if(r){ r.show=v; store.save('routes',routes); redraw(); } }
 function delRoute(id){ confirmBox('Xoá tuyến này?',()=>{ routes=routes.filter(r=>r.id!==id); store.save('routes',routes); redraw(); showRoutes(); }); }
@@ -557,16 +605,26 @@ function fitBounds(b){ follow=false; updFollow(); const x0=lon2x(b[0]),x1=lon2x(
   S.zoom=Math.max(2,Math.min(17,Math.min(zx,zy))); redraw(); saveSetSoon(); }
 
 /* ================= Dẫn đường ================= */
-function startNav(name,pts){ nav={name,pts,idx:0,from:fix?{lat:fix.lat,lon:fix.lon}:null}; $('navrow').style.display='flex'; updNav(); posBanner(); redraw(); toast('Bắt đầu dẫn đường: '+name); }
+let navSog=null, navSogT=0;
+function navSpeed(){ // tốc độ trung bình (~2 phút) để thời gian dự kiến không nhảy theo từng con sóng
+  if(fix&&fresh(fix.t,10000)){ const now=Date.now(), dt=Math.min(10,(now-(navSogT||now))/1000); navSogT=now;
+    navSog=navSog==null?fix.sog:navSog+(fix.sog-navSog)*Math.min(1,dt/120); }
+  return navSog!=null&&navSog>0.5?{kn:navSog,plan:false}:{kn:+set.planKn||6,plan:true}; }
+function startNav(name,pts){ navSog=fix&&fix.sog>0.5?fix.sog:null; navSogT=Date.now(); nav={name,pts,idx:0,from:fix?{lat:fix.lat,lon:fix.lon}:null}; $('navrow').style.display='flex'; updNav(); posBanner(); redraw();
+  const L=(fix?distNm(fix,pts[0]):0)+pathNm(pts), sp=navSpeed();
+  toast(`Bắt đầu dẫn đường: ${name} · ${fmtNm(L)} · dự kiến ${fmtDurL(L/sp.kn)}, đến lúc ${fmtClock(L/sp.kn)} (${sp.plan?'theo '+sp.kn+' kn dự kiến':'tốc độ '+sp.kn.toFixed(1)+' kn'})`); }
 function stopNav(){ nav=null; $('navrow').style.display='none'; setAlarm('xte',null); posBanner(); redraw(); }
 function updNav(){ if(!nav) return; const t=nav.pts[nav.idx];
   $('navname').textContent=(nav.pts.length>1?`${nav.name} (${nav.idx+1}/${nav.pts.length})`:nav.name).toUpperCase().slice(0,26);
-  if(!fix){ $('nbrg').textContent='--'; $('ndst').textContent='--'; $('nttg').textContent='--'; $('nxte').textContent='--'; return; }
+  if(!fix){ $('nbrg').textContent='--'; $('ndst').textContent='--'; $('nttg').textContent='--'; $('neta').textContent='--'; $('nxte').textContent='--'; return; }
   if(!nav.from) nav.from={lat:fix.lat,lon:fix.lon};
   let d=distNm(fix,t);
   if(d<0.03){ if(nav.idx<nav.pts.length-1){ nav.from=nav.pts[nav.idx]; nav.idx++; toast('Đã tới điểm '+nav.idx+', chuyển sang điểm kế'); if(NA) NA.beep(); return updNav(); } else { toast('Đã tới đích: '+nav.name); if(NA) NA.beep(); stopNav(); return; } }
   const total=d+pathNm(nav.pts.slice(nav.idx));
-  $('nbrg').textContent=fmt3(bearing(fix,t)); $('ndst').textContent=(d<10?d.toFixed(2):d.toFixed(1)); $('nttg').textContent=fix.sog>0.5?fmtDur(total/fix.sog):'--';
+  $('nbrg').textContent=fmt3(bearing(fix,t)); $('ndst').textContent=(d<10?d.toFixed(2):d.toFixed(1)); 
+  const sp=navSpeed(), hrs=total/sp.kn;
+  $('nttg').textContent=fmtDurL(hrs)+(sp.plan?'*':''); $('neta').textContent=fmtClock(hrs)+(sp.plan?'*':'');
+  $('nttg').parentNode.title=$('neta').parentNode.title=sp.plan?`* Tàu đang đứng: tính theo tốc độ dự kiến ${sp.kn} kn`:`Theo tốc độ trung bình ${sp.kn.toFixed(1)} kn, còn ${fmtNm(total)}`;
   const legLen=distNm(nav.from,t); const x=legLen>0.01?xteNm(nav.from,t,fix):0;
   $('nxte').textContent=Math.abs(x)<0.005?'0':(Math.abs(x)<10?Math.abs(x).toFixed(2):Math.abs(x).toFixed(1))+(x>0?' P':' T');
   setAlarm('xte', set.alm.xte&&Math.abs(x)>set.alm.xteNm ? `LỆCH ĐƯỜNG ${Math.abs(x).toFixed(2)} nm về bên ${x>0?'PHẢI':'TRÁI'}` : null); }
