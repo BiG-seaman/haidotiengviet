@@ -140,17 +140,31 @@ public class MainActivity extends Activity implements LocationListener {
         }
     }
 
+    android.location.GnssStatus.Callback gnssCb;
+    long lastSatMs = 0;
+
     void startGps() {
         if (gpsOn || lm == null) return;
         try {
-            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0, this, Looper.getMainLooper());
-                gpsOn = true;
-                Location last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                if (last != null) onLocationChanged(last);
-            } else {
-                toast("Hãy bật GPS (Vị trí) trong cài đặt điện thoại");
-            }
+            // đăng ký cả khi GPS đang tắt: người dùng bật lên là nhận vị trí ngay, không phải mở lại app
+            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0, this, Looper.getMainLooper());
+            gpsOn = true;
+            if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) toast("Hãy bật GPS (Vị trí) trong cài đặt điện thoại");
+            // số vệ tinh đang dùng / thấy được (hiển thị cạnh toạ độ)
+            gnssCb = new android.location.GnssStatus.Callback() {
+                @Override public void onSatelliteStatusChanged(android.location.GnssStatus st) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastSatMs < 2000) return;
+                    lastSatMs = now;
+                    int used = 0, n = st.getSatelliteCount();
+                    for (int i = 0; i < n; i++) if (st.usedInFix(i)) used++;
+                    js("window.onSats&&onSats(" + used + "," + n + ")");
+                }
+            };
+            try { lm.registerGnssStatusCallback(gnssCb, ui); } catch (Exception ignored) {}
+            // vị trí cũ chỉ dùng nếu còn mới (dưới 2 phút) để không hiện sai chỗ lúc mới mở
+            Location last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            if (last != null && System.currentTimeMillis() - last.getTime() < 120000) onLocationChanged(last);
         } catch (SecurityException ignored) {}
     }
 
@@ -163,6 +177,7 @@ public class MainActivity extends Activity implements LocationListener {
     @Override
     protected void onDestroy() {
         try { if (lm != null) lm.removeUpdates(this); } catch (Exception ignored) {}
+        try { if (lm != null && gnssCb != null) lm.unregisterGnssStatusCallback(gnssCb); } catch (Exception ignored) {}
         alarmOn = false;
         ui.removeCallbacks(alarmTick);
         if (tone != null) tone.release();
@@ -184,7 +199,7 @@ public class MainActivity extends Activity implements LocationListener {
                 + (l.hasAccuracy() ? l.getAccuracy() : -1) + "," + l.getTime() + ")");
     }
     @Override public void onStatusChanged(String p, int s, Bundle e) {}
-    @Override public void onProviderEnabled(String p) {}
+    @Override public void onProviderEnabled(String p) { if (LocationManager.GPS_PROVIDER.equals(p)) toast("Đã bật GPS, đang dò vệ tinh…"); }
     @Override public void onProviderDisabled(String p) {}
 
     // ---------- tiện ích ----------
