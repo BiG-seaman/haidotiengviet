@@ -183,7 +183,11 @@ class Charts:
                 n = 2
                 while cid in self.items:
                     cid = f"{base} ({n})"; n += 1
-            name = (meta.get("name") or "").strip() or base
+            name = (meta.get("name") or "").strip()
+            if not name or name.lower() in ("unnamed map", "untitled", "map"):
+                name = cid                     # SAS Planet hay ghi "Unnamed map": dùng tên tệp cho dễ nhận
+            if cid == "Hải đồ nền":
+                name = "Hải đồ nền"
             info = {"id": cid, "name": name, "minzoom": int(minz), "maxzoom": int(maxz), "format": fmt,
                     "size": os.path.getsize(path), "path": path}
             try:
@@ -192,18 +196,21 @@ class Charts:
                     info["bounds"] = b
             except Exception:
                 pass
-            if "bounds" not in info:          # tệp không ghi vùng phủ: tính từ các ô ở mức zoom nhỏ nhất
-                try:
-                    z = int(minz); n = 1 << z
+            # Vùng phủ tính từ dữ liệu thật (nhiều công cụ như SAS Planet ghi sai vùng phủ trong metadata):
+            # dùng mức zoom lớn nhất có dữ liệu trong khoảng <= 10 để đủ chính xác mà vẫn nhanh
+            try:
+                for z in range(min(int(maxz), 10), int(minz) - 1, -1):
                     r = db.execute(f"SELECT MIN(tile_column), MAX(tile_column), MIN(tile_row), MAX(tile_row) FROM tiles WHERE zoom_level={z}").fetchone()
                     if r and r[0] is not None:
+                        n = 1 << z
                         x0, x1, r0, r1 = r
                         y0, y1 = n - 1 - r1, n - 1 - r0
                         lon = lambda x: x / n * 360 - 180
                         lat = lambda y: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
                         info["bounds"] = [lon(x0), lat(y1 + 1), lon(x1 + 1), lat(y0)]
-                except Exception as e:
-                    log("bounds", e)
+                        break
+            except Exception as e:
+                log("bounds", e)
         except Exception as e:
             log("open chart failed", path, e)
             return None
@@ -248,7 +255,12 @@ class Charts:
         except Exception as e:
             log("zooms failed", path, e)
 
-    def remove(self, cid):
+    def remove(self, cid, user=True):
+        if user and cid == "Hải đồ nền":     # người dùng tự xoá hải đồ nền: không tự thêm lại
+            try:
+                open(os.path.join(ROOT, "default_chart_removed"), "w").close()
+            except Exception:
+                pass
         with self.lock:
             self.items.pop(cid, None)
             p = self.pools.pop(cid, None)
@@ -685,23 +697,25 @@ def selftest(url):
 
 
 def install_default_chart():
-    """Hải đồ nền mặc định đóng gói sẵn (basemap/default.mbtiles): bật một lần sau khi cài, dùng tại chỗ."""
-    flag = os.path.join(ROOT, "default_chart_installed")
+    """Hải đồ nền mặc định đóng gói sẵn (basemap/default.mbtiles), dùng tại chỗ.
+    Luôn trỏ tới tệp trong thư mục cài đang chạy; chỉ bỏ qua nếu người dùng đã tự xoá nó khỏi danh sách."""
     src = os.path.join(BASE, "basemap", "default.mbtiles")
-    shown = os.path.join(ROOT, "default_chart_shown")
-    if os.path.exists(flag):
-        # máy đã cài bằng bản trước (chưa tự di chuyển tới hải đồ nền): làm việc đó một lần
-        if not os.path.exists(shown) and "Hải đồ nền" in CHARTS.items:
-            EV.pend("onChartsChanged", "Hải đồ nền")
-            open(shown, "w").close()
+    removed = os.path.join(ROOT, "default_chart_removed")
+    shown = os.path.join(ROOT, "default_chart_shown2")
+    if os.path.exists(removed):
         return
     if not os.path.exists(src):
         log("khong co hai do nen trong goi cai", src)
         return
-    cid = CHARTS.open(src, "Hải đồ nền")
-    log("cai hai do nen", src, "->", cid)
-    if cid:
-        open(flag, "w").close()
+    cid = "Hải đồ nền"
+    it = CHARTS.items.get(cid)
+    if it and os.path.normcase(it["path"]) != os.path.normcase(os.path.abspath(src)):
+        CHARTS.remove(cid, user=False)          # bản cài cũ ở thư mục khác
+        it = None
+    if not it:
+        cid = CHARTS.open(src, cid)
+        log("cai hai do nen", src, "->", cid)
+    if cid and not os.path.exists(shown):
         open(shown, "w").close()
         EV.pend("onChartsChanged", cid)       # giao diện mở lên sẽ tự di chuyển tới vùng hải đồ nền
         EV.pend("onToast", "Đã cài hải đồ nền mặc định")
