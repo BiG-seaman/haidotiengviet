@@ -622,7 +622,7 @@ function checkAnchor(){ if(!anchor||!fix) return; const d=distNm(anchor,fix)*185
 
 /* ================= Lớp hải đồ & MBTiles ================= */
 function refreshCharts(){ try{ charts = NA ? JSON.parse(NA.listCharts()) : []; }catch(e){ charts=[]; } redraw(); }
-window.onChartsChanged=function(newId){ refreshCharts(); if(newId){ set.charts[newId]=true; saveSet(); const c=charts.find(c=>c.id===newId); if(c&&c.bounds) fitBounds(c.bounds); } if($('panel').style.display==='flex'&&$('panel').dataset.t==='Lớp hải đồ') showLayers(); };
+window.onChartsChanged=function(newId){ refreshCharts(); if(newId){ set.charts[newId]=true; saveSet(); const c=charts.find(c=>c.id===newId); if(c){ if(c.bounds) fitBounds(c.bounds); if(S.zoom<c.minzoom){ S.zoom=c.minzoom; redraw(); } } } if($('panel').style.display==='flex'&&$('panel').dataset.t==='Lớp hải đồ') showLayers(); };
 window.onImportProgress=function(pct,name){ toast('Đang nạp '+name+'… '+pct+'%'); };
 window.onToast=toast;
 function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm?'checked':''} onchange="set.osm=this.checked;saveSet();redraw()">Bản đồ nền OpenStreetMap</label>
