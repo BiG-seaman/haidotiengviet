@@ -65,6 +65,10 @@ public class MainActivity extends Activity implements LocationListener {
     // nhiều kết nối đọc cho mỗi tệp MBTiles để đọc ô song song trên nhiều nhân CPU (~75% số nhân)
     final Map<String, SQLiteDatabase[]> pools = new ConcurrentHashMap<>();
     final Map<String, String> paths = new ConcurrentHashMap<>();
+    // hải đồ BSB/KAP (cắt ô theo yêu cầu) và SQLiteDB (RMaps/OsmAnd: {đảo zoom, đảo y})
+    final Map<String, KapChart> kaps = new ConcurrentHashMap<>();
+    final Map<String, boolean[]> sqm = new ConcurrentHashMap<>();
+    static final String EXT_RE = "(?i)\\.(mbtiles|kap|sqlitedb)$";
     final java.util.concurrent.atomic.AtomicInteger rr = new java.util.concurrent.atomic.AtomicInteger();
     final int POOL = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() * 3 / 4));
     String pendingGpx = null;
@@ -249,6 +253,8 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     void closePool(String id) {
+        kaps.remove(id);
+        sqm.remove(id);
         SQLiteDatabase[] p = pools.remove(id);
         paths.remove(id);
         SQLiteDatabase main = dbs.remove(id);
@@ -257,12 +263,20 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     byte[] chartTile(String id, int z, int x, int y) {
+        KapChart k = kaps.get(id);
+        if (k != null) {
+            try { return k.tile(z, x, y); } catch (Throwable e) { return null; }
+        }
         SQLiteDatabase db = conn(id);
         if (db == null) return null;
         int tmsY = (1 << z) - 1 - y;
+        boolean[] sq = sqm.get(id);
         // số nguyên ghép thẳng vào câu lệnh: so sánh đúng cả khi "tiles" là VIEW (không có kiểu cột)
         try {
-            Cursor c = db.rawQuery("SELECT tile_data FROM tiles WHERE zoom_level=" + z + " AND tile_column=" + x + " AND tile_row=" + tmsY + " LIMIT 1", null);
+            String q = sq != null
+                    ? "SELECT image FROM tiles WHERE x=" + x + " AND y=" + (sq[1] ? tmsY : y) + " AND z=" + (sq[0] ? 17 - z : z) + " LIMIT 1"
+                    : "SELECT tile_data FROM tiles WHERE zoom_level=" + z + " AND tile_column=" + x + " AND tile_row=" + tmsY + " LIMIT 1";
+            Cursor c = db.rawQuery(q, null);
             try { return c.moveToFirst() ? c.getBlob(0) : null; } finally { c.close(); }
         } catch (Exception e) {
             return null;   // tệp vừa bị xoá hoặc thay
@@ -359,10 +373,143 @@ public class MainActivity extends Activity implements LocationListener {
     void loadCharts() {
         File[] fs = chartDir().listFiles();
         if (fs == null) return;
-        for (File f : fs) if (f.getName().toLowerCase().endsWith(".mbtiles")) openChart(f);
+        for (File f : fs) if (f.getName().matches("(?i).*\\.(mbtiles|kap|sqlitedb)$")) openChart(f);
+    }
+
+    // Nhận dạng theo nội dung: "mbtiles" / "sqlitedb" / "kap" / null
+    static String chartKind(File f) {
+        byte[] h = new byte[16];
+        try (FileInputStream in = new FileInputStream(f)) {
+            if (in.read(h) < 16) return null;
+        } catch (Exception e) {
+            return null;
+        }
+        if (new String(h, 0, 15, StandardCharsets.ISO_8859_1).equals("SQLite format 3")) {
+            SQLiteDatabase db = null;
+            try {
+                db = SQLiteDatabase.openDatabase(f.getPath(), null, SQLiteDatabase.OPEN_READONLY | SQLiteDatabase.NO_LOCALIZED_COLLATORS);
+                java.util.Set<String> cols = new java.util.HashSet<>();
+                Cursor c = db.rawQuery("PRAGMA table_info(tiles)", null);
+                while (c.moveToNext()) cols.add(c.getString(1).toLowerCase());
+                c.close();
+                if (cols.contains("tile_data")) return "mbtiles";
+                if (cols.contains("image") && cols.contains("z")) return "sqlitedb";
+            } catch (Exception ignored) {
+            } finally {
+                if (db != null) try { db.close(); } catch (Exception ignored) {}
+            }
+            return null;
+        }
+        return KapChart.isKap(f) ? "kap" : null;
+    }
+
+    boolean openKap(File f) {
+        try {
+            final KapChart k = new KapChart(f, new File(getCacheDir(), "kap"));
+            String id = f.getName().replaceAll(EXT_RE, "");
+            JSONObject o = new JSONObject();
+            o.put("id", id);
+            o.put("name", k.name.isEmpty() ? id : k.name);
+            o.put("minzoom", k.minzoom);
+            o.put("maxzoom", k.maxzoom);
+            o.put("format", "png");
+            o.put("type", "kap");
+            o.put("size", f.length());
+            JSONArray a = new JSONArray();
+            for (double v : k.bounds) a.put(v);
+            o.put("bounds", a);
+            kaps.put(id, k);
+            paths.put(id, f.getPath());
+            infos.put(id, o);
+            new Thread(() -> {     // giải mã ảnh một lần (lưu đệm), để các ô đầu tiên hiện nhanh
+                try { k.image(); js("window.onChartsChanged&&onChartsChanged()"); } catch (Throwable ignored) {}
+            }).start();
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    boolean openSqlitedb(File f) {
+        SQLiteDatabase db = null;
+        try {
+            db = SQLiteDatabase.openDatabase(f.getPath(), null, SQLiteDatabase.OPEN_READONLY | SQLiteDatabase.NO_LOCALIZED_COLLATORS);
+            boolean invZ = true, invY = false;
+            try {
+                Cursor c = db.rawQuery("SELECT * FROM info LIMIT 1", null);
+                if (c.moveToFirst()) {
+                    int i = c.getColumnIndex("tilenumbering");
+                    if (i >= 0) invZ = "bigplanet".equalsIgnoreCase(c.getString(i) == null ? "" : c.getString(i));
+                    i = c.getColumnIndex("inverted_y");
+                    if (i >= 0) { String v = c.getString(i); invY = v != null && !v.isEmpty() && !"0".equals(v); }
+                }
+                c.close();
+            } catch (Exception ignored) {}
+            JSONObject zs = new JSONObject();
+            int minz = 99, maxz = -1;
+            Cursor c = db.rawQuery("SELECT z, MIN(x), MAX(x), MIN(y), MAX(y) FROM tiles GROUP BY z", null);
+            while (c.moveToNext()) {
+                int z = invZ ? 17 - c.getInt(0) : c.getInt(0);
+                if (z < 0 || z > 24) continue;
+                int y0 = c.getInt(3), y1 = c.getInt(4);
+                if (invY) { int n = (1 << z) - 1, t = n - y1; y1 = n - y0; y0 = t; }
+                JSONArray a = new JSONArray();
+                a.put(c.getInt(1)); a.put(c.getInt(2)); a.put(y0); a.put(y1);
+                zs.put(String.valueOf(z), a);
+                minz = Math.min(minz, z); maxz = Math.max(maxz, z);
+            }
+            c.close();
+            if (maxz < 0) throw new Exception("khong co o");
+            String fmt = "png";
+            c = db.rawQuery("SELECT image FROM tiles LIMIT 1", null);
+            if (c.moveToFirst()) {
+                byte[] d = c.getBlob(0);
+                if (d != null && d.length > 2) {
+                    if ((d[0] & 0xff) == 0xff && (d[1] & 0xff) == 0xd8) fmt = "jpg";
+                    else if (d[0] == 'R' && d[1] == 'I') fmt = "webp";
+                }
+            }
+            c.close();
+            int bz = minz;
+            for (int z = minz; z <= Math.min(maxz, 10); z++) if (zs.has(String.valueOf(z))) bz = z;
+            JSONArray r = zs.getJSONArray(String.valueOf(bz));
+            int n2 = 1 << bz;
+            double x0 = r.getInt(0), x1 = r.getInt(1) + 1, y0 = r.getInt(2), y1 = r.getInt(3) + 1;
+            JSONArray b = new JSONArray();
+            b.put(x0 / n2 * 360 - 180);
+            b.put(Math.toDegrees(Math.atan(Math.sinh(Math.PI * (1 - 2 * y1 / n2)))));
+            b.put(x1 / n2 * 360 - 180);
+            b.put(Math.toDegrees(Math.atan(Math.sinh(Math.PI * (1 - 2 * y0 / n2)))));
+            String id = f.getName().replaceAll(EXT_RE, "");
+            JSONObject o = new JSONObject();
+            o.put("id", id);
+            o.put("name", id);
+            o.put("minzoom", minz);
+            o.put("maxzoom", maxz);
+            o.put("format", fmt);
+            o.put("type", "sqlitedb");
+            o.put("size", f.length());
+            o.put("bounds", b);
+            o.put("zooms", zs);
+            sqm.put(id, new boolean[]{invZ, invY});
+            dbs.put(id, db);
+            infos.put(id, o);
+            SQLiteDatabase[] pool = new SQLiteDatabase[POOL];
+            pool[0] = db;
+            paths.put(id, f.getPath());
+            pools.put(id, pool);
+            return true;
+        } catch (Exception e) {
+            if (db != null) try { db.close(); } catch (Exception ignored) {}
+            return false;
+        }
     }
 
     boolean openChart(File f) {
+        String kind = chartKind(f);
+        if ("kap".equals(kind)) return openKap(f);
+        if ("sqlitedb".equals(kind)) return openSqlitedb(f);
+        if (kind == null) return false;
         SQLiteDatabase db = null;
         try {
             db = SQLiteDatabase.openDatabase(f.getPath(), null, SQLiteDatabase.OPEN_READONLY | SQLiteDatabase.NO_LOCALIZED_COLLATORS);
@@ -395,7 +542,7 @@ public class MainActivity extends Activity implements LocationListener {
                 }
             }
             c.close();
-            String id = f.getName().replaceAll("(?i)\\.mbtiles$", "");
+            String id = f.getName().replaceAll(EXT_RE, "");
             JSONObject o = new JSONObject();
             o.put("id", id);
             String name = meta.get("name");
@@ -492,7 +639,7 @@ public class MainActivity extends Activity implements LocationListener {
         }).start();
     }
 
-    // Nạp một hoặc nhiều tệp MBTiles, lần lượt từng tệp trên một luồng nền
+    // Chèn một hoặc nhiều tệp hải đồ (MBTiles / KAP / SQLiteDB), lần lượt từng tệp trên một luồng nền
     void importMbtilesMany(final java.util.List<Uri> uris) {
         new Thread(() -> {
             int ok = 0, total = uris.size();
@@ -505,7 +652,7 @@ public class MainActivity extends Activity implements LocationListener {
                     if (k < total - 1) js("window.onChartsChanged&&onChartsChanged()");
                 }
             }
-            if (total > 1) toast("Đã nạp " + ok + "/" + total + " tệp hải đồ");
+            if (total > 1) toast("Đã chèn " + ok + "/" + total + " hải đồ");
             if (lastId != null && ok > 0) js("window.onChartsChanged&&onChartsChanged(" + JSONObject.quote(lastId) + ")");
         }).start();
     }
@@ -526,8 +673,11 @@ public class MainActivity extends Activity implements LocationListener {
             }
         } catch (Exception ignored) {}
         name = name.replaceAll("[^\\p{L}\\p{N}._ -]", "_").replaceAll("['\"]", "_");
-        if (!name.toLowerCase().endsWith(".mbtiles")) name = name + ".mbtiles";
-        String id = name.replaceAll("(?i)\\.mbtiles$", "");
+        String ext = ".mbtiles";
+        java.util.regex.Matcher em = java.util.regex.Pattern.compile(EXT_RE).matcher(name);
+        if (em.find()) { ext = "." + em.group(1).toLowerCase(); name = name.substring(0, em.start()); }
+        name = name + ext;
+        String id = name.replaceAll(EXT_RE, "");
         String label = (total > 1 ? "(" + idx + "/" + total + ") " : "") + name;
         File out = new File(chartDir(), name);
         File tmp = new File(chartDir(), name + ".part");
@@ -549,18 +699,31 @@ public class MainActivity extends Activity implements LocationListener {
             }
             o.close();
             in.close();
-            if (out.exists()) out.delete();
+            // nhận dạng theo nội dung: đặt đúng đuôi tệp dù tên tệp gốc không có
+            String kind = chartKind(tmp);
+            if (kind == null) {
+                tmp.delete();
+                toast("Không đọc được hải đồ (cần MBTiles, KAP hoặc SQLiteDB): " + name);
+                return null;
+            }
+            if (!("." + kind).equals(ext)) {
+                File o2 = new File(chartDir(), id + "." + kind);
+                tmp.renameTo(new File(o2.getPath() + ".part"));
+                tmp = new File(o2.getPath() + ".part");
+                out = o2;
+            }
+            for (String e2 : new String[]{".mbtiles", ".kap", ".sqlitedb"}) new File(chartDir(), id + e2).delete();
             new File(out.getPath() + ".zooms.json").delete();
             if (!tmp.renameTo(out)) throw new Exception("rename");
             if (openChart(out)) {
-                toast("Đã nạp hải đồ: " + label);
+                toast("Đã chèn hải đồ: " + label);
                 return id;
             }
             out.delete();
-            toast("Không phải MBTiles hợp lệ: " + name);
+            toast("Không đọc được hải đồ: " + name);
         } catch (Exception e) {
             tmp.delete();
-            toast("Không nạp được " + name + " (kiểm tra dung lượng trống)");
+            toast("Không chèn được " + name + " (kiểm tra dung lượng trống)");
         }
         return null;
     }
@@ -733,7 +896,7 @@ public class MainActivity extends Activity implements LocationListener {
             File[] fs = chartDir().listFiles();
             if (fs != null) for (File f : fs) {
                 String nm = f.getName();
-                if (nm.replaceAll("(?i)\\.mbtiles$", "").equals(id) || nm.equals(id + ".mbtiles.zooms.json")) f.delete();
+                if ((nm.matches("(?i).*\\.(mbtiles|kap|sqlitedb)$") && nm.replaceAll(EXT_RE, "").equals(id)) || nm.equals(id + ".mbtiles.zooms.json")) f.delete();
             }
         }
 
