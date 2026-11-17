@@ -55,6 +55,9 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 #banner.ack{background:#e07b00}
 #banner button{font-size:14px}
 .info p{margin:8px 0}
+#notice{position:absolute;left:10px;right:74px;top:60px;background:#fff3c4;color:#3b2a00;border-left:5px solid #f5b400;border-radius:10px;padding:10px 34px 10px 12px;font-size:15px;line-height:1.35;display:none;z-index:7;box-shadow:0 3px 10px rgba(0,0,0,.35);cursor:pointer;animation:ntIn .35s ease-out}
+#notice .x{position:absolute;right:4px;top:2px;border:0;background:none;font-size:20px;color:#7a5a00;padding:4px 8px;cursor:pointer}
+@keyframes ntIn{from{transform:translateY(-12px);opacity:0}to{transform:none;opacity:1}}
 #tidebox{position:absolute;left:10px;bottom:52px;background:rgba(8,28,44,.9);color:#eaf2f7;padding:7px 11px;border-radius:18px;font-size:14px;display:none;z-index:4;box-shadow:0 2px 6px rgba(0,0,0,.35);max-width:calc(100% - 90px)}
 @media (min-width:900px){   /* màn hình máy tính: bảng nổi bên trái thay vì trải hết chiều ngang */
   #panel{left:12px;right:auto;bottom:12px;width:440px;max-height:calc(100% - 130px);border-radius:16px}
@@ -86,6 +89,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 </div>
 <div id="attr">© OpenStreetMap · OpenSeaMap</div>
 <div id="tidebox" onclick="openAutoTide()"></div>
+<div id="notice" onclick="noticeTap(event)"><span id="ntext"></span><button class="x" onclick="hideNotice(event)">✕</button></div>
 <div id="btns">
   <button class="fab" id="bfollow" onclick="toggleFollow()">◎</button>
   <button class="fab" onclick="zoomBy(1)">＋</button>
@@ -119,7 +123,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.7';
+const APP_VER='1.11';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -870,6 +874,27 @@ function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-si
 
 /* ================= Khởi động ================= */
 applyNight(); updFollow(); refreshCharts(); resize(); updTideBox(); setTimeout(()=>autoTide(),1500);
+
+/* ================= Thông báo từ nhà phát triển (📢) =================
+   Đọc tệp thongbao.txt trên kho GitHub; mỗi dòng bắt đầu bằng "@thongbao:" là một thông báo.
+   Cứ 3 phút hiện một thông báo (lần lượt nếu có nhiều dòng), tự ẩn sau 20 giây; lưu lại để dùng khi mất mạng. */
+const NOTICE_URL='https://raw.githubusercontent.com/BiG-seaman/haidotiengviet/main/thongbao.txt';
+let notices=(store.load('notices')||{}).lines||[], noticeIdx=0, noticeT=0, noticeFetchT=0;
+async function fetchNotices(){ if(navigator.onLine===false) return;
+  try{ const r=await fetch(NOTICE_URL+'?t='+Math.floor(Date.now()/60000),{cache:'no-store'}); if(!r.ok) return;
+    const lines=(await r.text()).split(/\r?\n/).map(l=>l.trim()).filter(l=>/^@thongbao\s*:/i.test(l)).map(l=>l.replace(/^@thongbao\s*:\s*/i,'')).filter(Boolean).slice(0,20);
+    notices=lines; noticeFetchT=Date.now(); store.save('notices',{lines,t:noticeFetchT}); if(!lines.length) hideNotice(); }catch(e){} }
+function showNotice(){ if(!notices.length) return;
+  if(Object.keys(alm).length||$('modal').style.display==='flex') return;      // không che báo động / hộp thoại
+  const t=notices[noticeIdx%notices.length]; noticeIdx++;
+  $('ntext').textContent='📢 '+t; const n=$('notice'); n.style.top=($('top').offsetHeight+8)+'px';
+  n.style.display='none'; void n.offsetWidth; n.style.display='block';
+  clearTimeout(noticeT); noticeT=setTimeout(hideNotice,20000); }
+function hideNotice(e){ if(e) e.stopPropagation(); clearTimeout(noticeT); $('notice').style.display='none'; }
+function noticeTap(e){ hideNotice(e); showInfo(); }
+setTimeout(async()=>{ await fetchNotices(); showNotice(); },8000);
+setInterval(()=>{ if(Date.now()-noticeFetchT>15*60000) fetchNotices(); showNotice(); },3*60000);
+window.addEventListener('online',fetchNotices);
 if(anchor) redraw();
 if(!NA && navigator.geolocation) navigator.geolocation.watchPosition(p=>window.onGps(p.coords.latitude,p.coords.longitude,p.coords.speed==null?-1:p.coords.speed,p.coords.heading==null?-1:p.coords.heading,p.coords.accuracy,p.timestamp),()=>{}, {enableHighAccuracy:true});
 if(NA) NA.ready();
