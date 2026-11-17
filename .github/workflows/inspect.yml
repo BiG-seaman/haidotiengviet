@@ -1,0 +1,47 @@
+name: Kiem tra hai do nen
+on:
+  push:
+    paths:
+      - '.github/workflows/inspect.yml'
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tai va kiem tra VN.mbtiles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/bm
+          gh release download basemap --repo "${{ github.repository }}" --pattern "*.mbtiles" --dir /tmp/bm
+          ls -la /tmp/bm
+          python3 - <<'PY'
+          import sqlite3, glob, os, sys
+          f = glob.glob('/tmp/bm/*.mbtiles')[0]
+          print('FILE', f, os.path.getsize(f))
+          print('HEADER', open(f, 'rb').read(16))
+          db = sqlite3.connect(f)
+          for r in db.execute("SELECT type, name, sql FROM sqlite_master"):
+              print('SCHEMA', r)
+          for q in ["SELECT * FROM metadata",
+                    "SELECT zoom_level, COUNT(*), MIN(tile_column), MAX(tile_column), MIN(tile_row), MAX(tile_row) FROM tiles GROUP BY zoom_level",
+                    "SELECT * FROM info",
+                    "SELECT z, COUNT(*) FROM tiles GROUP BY z"]:
+              try:
+                  print('Q', q); [print('  ', r) for r in db.execute(q).fetchall()[:40]]
+              except Exception as e:
+                  print('  ERR', e)
+          for q in ["SELECT tile_data FROM tiles LIMIT 1", "SELECT image FROM tiles LIMIT 1"]:
+              try:
+                  r = db.execute(q).fetchone(); print('SAMPLE', q, bytes(r[0][:12]) if r and r[0] else r)
+              except Exception as e:
+                  print('SAMPLE ERR', q, e)
+          sys.path.insert(0, 'pc'); os.environ['HAIDOVN_HOME'] = '/tmp/hdhome'
+          import app
+          app.CHARTS = app.Charts()
+          cid = app.CHARTS.open(f, 'Hải đồ nền')
+          print('APP OPEN ->', cid)
+          print('APP LIST ->', app.CHARTS.list())
+          print('LOG:'); print(open('/tmp/hdhome/haidovn.log', encoding='utf-8').read() if os.path.exists('/tmp/hdhome/haidovn.log') else '(trống)')
+          PY
