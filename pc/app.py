@@ -109,6 +109,34 @@ def atomic_write(path, data: bytes):
 
 
 # ---------------- Hải đồ MBTiles (dùng tại chỗ, không chép) ----------------
+def chart_kind(path):
+    """Nhận dạng tệp hải đồ theo nội dung: mbtiles / sqlitedb / kap (None nếu không đọc được)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except Exception:
+        return None
+    if head.startswith(b"SQLite format 3"):
+        try:
+            c = sqlite3.connect(path)
+            cols = {r[1].lower() for r in c.execute("PRAGMA table_info(tiles)")}
+            c.close()
+        except Exception:
+            return None
+        if "tile_data" in cols:
+            return "mbtiles"
+        if "image" in cols and "z" in cols:
+            return "sqlitedb"
+        return None
+    try:
+        import kap
+        if kap.is_kap(path):
+            return "kap"
+    except Exception as e:
+        log("kap module", e)
+    return None
+
+
 class Charts:
     def __init__(self):
         self.lock = threading.Lock()
@@ -159,8 +187,15 @@ class Charts:
             for k, v in self.items.items():
                 if os.path.normcase(v["path"]) == os.path.normcase(path):
                     return k
+        kind = chart_kind(path)
+        if kind == "kap":
+            return self.open_kap(path, cid, save)
+        if kind is None:
+            return None
         try:
             db = self.connect(path)
+            if kind == "sqlitedb":
+                return self.open_sqlitedb(path, db, cid, save)
             meta = {}
             try:
                 for n, v in db.execute("SELECT name, value FROM metadata"):
@@ -177,12 +212,7 @@ class Charts:
             if row and row[0]:
                 d = bytes(row[0][:4])
                 fmt = "jpg" if d[:2] == b"\xff\xd8" else "webp" if d[:2] == b"RI" else "png" if d[:2] == b"\x89P" else "pbf"
-            base = re.sub(r"(?i)\.mbtiles$", "", os.path.basename(path))
-            if not cid:
-                cid = base
-                n = 2
-                while cid in self.items:
-                    cid = f"{base} ({n})"; n += 1
+            cid = self.new_id(path, cid)
             name = (meta.get("name") or "").strip()
             if not name or name.lower() in ("unnamed map", "untitled", "map"):
                 name = cid                     # SAS Planet hay ghi "Unnamed map": dùng tên tệp cho dễ nhận
@@ -223,6 +253,92 @@ class Charts:
             self.save()
         threading.Thread(target=self.zooms, args=(cid, path), daemon=True).start()
         return cid
+
+    def new_id(self, path, cid=None):
+        if cid:
+            return cid
+        base = re.sub(r"(?i)\.(mbtiles|kap|sqlitedb)$", "", os.path.basename(path))
+        cid, n = base, 2
+        while cid in self.items:
+            cid = f"{base} ({n})"; n += 1
+        return cid
+
+    def _store(self, cid, item, save):
+        with self.lock:
+            self.items[cid] = item
+        if save:
+            self.save()
+        return cid
+
+    def open_kap(self, path, cid, save):
+        """Hải đồ raster BSB/KAP: cắt ô theo yêu cầu (xem kap.py)."""
+        try:
+            import kap
+            k = kap.KapChart(path, os.path.join(CACHE, "kap"))
+        except Exception as e:
+            log("open kap failed", path, e)
+            return None
+        cid = self.new_id(path, cid)
+        info = {"id": cid, "name": k.name or cid, "minzoom": k.minzoom, "maxzoom": k.maxzoom, "format": "png",
+                "size": os.path.getsize(path), "path": path, "bounds": k.bounds, "type": "kap"}
+        threading.Thread(target=self._warm_kap, args=(cid, k), daemon=True).start()
+        return self._store(cid, {"path": path, "info": info, "kap": k}, save)
+
+    def _warm_kap(self, cid, k):
+        try:
+            k._image()                   # giải mã ảnh một lần, lưu đệm ra đĩa
+            EV.send("onChartsChanged")
+        except Exception as e:
+            log("kap decode", e)
+
+    def open_sqlitedb(self, path, db, cid, save):
+        """Định dạng SQLiteDB (RMaps / OsmAnd / Locus): bảng tiles(x, y, z, s, image)."""
+        try:
+            cols = {r[1].lower() for r in db.execute("PRAGMA table_info(info)")}
+            inv_z, inv_y = True, False
+            if cols:
+                r = db.execute("SELECT * FROM info LIMIT 1").fetchone()
+                names = [d[0].lower() for d in db.execute("SELECT * FROM info LIMIT 1").description]
+                row = dict(zip(names, r)) if r else {}
+                if "tilenumbering" in row:
+                    inv_z = str(row.get("tilenumbering") or "").lower() == "bigplanet"
+                if "inverted_y" in row:
+                    inv_y = str(row.get("inverted_y") or "0") not in ("0", "", "None")
+            zs = {}
+            for zr, a, b, c, d in db.execute("SELECT z, MIN(x), MAX(x), MIN(y), MAX(y) FROM tiles GROUP BY z"):
+                if zr is None:
+                    continue
+                z = 17 - zr if inv_z else zr
+                if not 0 <= z <= 24:
+                    continue
+                if inv_y:
+                    n = (1 << z) - 1
+                    c, d = n - d, n - c
+                zs[str(z)] = [a, b, c, d]
+            if not zs:
+                raise ValueError("không có ô")
+            r = db.execute("SELECT image FROM tiles LIMIT 1").fetchone()
+            d = bytes(r[0][:4]) if r and r[0] else b""
+            fmt = "jpg" if d[:2] == b"\xff\xd8" else "webp" if d[:2] == b"RI" else "png"
+            cid = self.new_id(path, cid)
+            zi = sorted(int(z) for z in zs)
+            bz = max([z for z in zi if z <= 10] or [zi[0]])
+            x0, x1, y0, y1 = zs[str(bz)]
+            n = 1 << bz
+            lon = lambda x: x / n * 360 - 180
+            lat = lambda y: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+            info = {"id": cid, "name": cid, "minzoom": zi[0], "maxzoom": zi[-1], "format": fmt, "type": "sqlitedb",
+                    "size": os.path.getsize(path), "path": path, "zooms": zs,
+                    "bounds": [lon(x0), lat(y1 + 1), lon(x1 + 1), lat(y0)]}
+        except Exception as e:
+            log("open sqlitedb failed", path, e)
+            db.close()
+            return None
+        q = queue.Queue(maxsize=max(2, min(8, (os.cpu_count() or 4) * 3 // 4)))
+        q.put(db)
+        with self.lock:
+            self.pools[cid] = q
+        return self._store(cid, {"path": path, "info": info, "sq": (inv_z, inv_y)}, save)
 
     def zooms(self, cid, path):
         """Đọc phạm vi ô của từng mức zoom (lưu lại để lần sau mở nhanh)."""
@@ -277,11 +393,22 @@ class Charts:
             return [dict(v["info"]) for v in self.items.values()]
 
     def tile(self, cid, z, x, y):
+        it = self.items.get(cid)
+        if it and "kap" in it:
+            try:
+                return it["kap"].tile(z, x, y)
+            except Exception as e:
+                log("kap tile", e)
+                return None
         p, c = self.conn(cid)
         if c is None:
             return None
         try:
-            r = c.execute(f"SELECT tile_data FROM tiles WHERE zoom_level={z} AND tile_column={x} AND tile_row={(1 << z) - 1 - y} LIMIT 1").fetchone()
+            if it and "sq" in it:
+                iz, iy = it["sq"]
+                r = c.execute(f"SELECT image FROM tiles WHERE x={x} AND y={((1 << z) - 1 - y) if iy else y} AND z={17 - z if iz else z} LIMIT 1").fetchone()
+            else:
+                r = c.execute(f"SELECT tile_data FROM tiles WHERE zoom_level={z} AND tile_column={x} AND tile_row={(1 << z) - 1 - y} LIMIT 1").fetchone()
             return bytes(r[0]) if r and r[0] else None
         except Exception:
             return None
@@ -616,7 +743,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def pick_mbtiles():
     with DIALOG_LOCK:
-        paths = dialog("open", True, ["Hải đồ MBTiles (*.mbtiles)", "Tất cả (*.*)"])
+        paths = dialog("open", True, ["Hải đồ (*.mbtiles;*.kap;*.sqlitedb)", "MBTiles (*.mbtiles)", "BSB KAP (*.kap)", "SQLiteDB (*.sqlitedb)", "Tất cả (*.*)"])
     if not paths:
         return
     last, ok = None, 0
@@ -627,9 +754,9 @@ def pick_mbtiles():
             if i < len(paths) - 1:
                 EV.send("onChartsChanged")
         else:
-            toast("Không phải MBTiles hợp lệ: " + os.path.basename(pth))
+            toast("Không đọc được hải đồ: " + os.path.basename(pth))
     if last:
-        toast(f"Đã thêm {ok}/{len(paths)} tệp hải đồ")
+        toast(f"Đã chèn {ok}/{len(paths)} hải đồ")
         EV.send("onChartsChanged", last)
 
 
@@ -684,6 +811,25 @@ def selftest(url):
         urllib.request.urlopen(req, timeout=10)
         assert get("/api/load?k=tt").read() == b'{"a":1}', "save/load"
         CHARTS.remove(cid)
+        # KAP
+        import kap
+        kp = os.path.join(tmp, "Thu.kap")
+        kap.write_test_kap(kp)
+        kid = CHARTS.open(kp)
+        assert kid, "kap open"
+        t = get(f"/m/{urllib.parse.quote(kid)}/7/{int((106.5 + 180) / 360 * 128)}/{int((1 - math.asinh(math.tan(math.radians(10.5))) / math.pi) / 2 * 128)}").read()
+        assert t[:4] == b"\x89PNG", "kap tile"
+        CHARTS.remove(kid)
+        # SQLiteDB
+        sq = os.path.join(tmp, "Thu.sqlitedb")
+        db = sqlite3.connect(sq)
+        db.executescript("CREATE TABLE tiles(x int,y int,z int,s int,image blob); CREATE TABLE info(maxzoom int,minzoom int);")
+        db.execute("INSERT INTO tiles VALUES(25,14,12,0,?)", (png,))
+        db.commit(); db.close()
+        sid = CHARTS.open(sq)
+        assert sid, "sqlitedb open"
+        assert get(f"/m/{urllib.parse.quote(sid)}/5/25/14").read() == png, "sqlitedb tile"
+        CHARTS.remove(sid)
         import serial  # noqa: F401  (kiểm tra đã đóng gói pyserial)
         out.append("SELFTEST OK")
         code = 0

@@ -9,8 +9,13 @@ CHẠY CHƯƠNG TRÌNH
 - Cần Windows 10 hoặc 11 có Microsoft Edge WebView2 (thường có sẵn). Nếu thiếu, tải "WebView2 Runtime"
   miễn phí ở trang của Microsoft. Khi không có WebView2, chương trình tự mở bằng Microsoft Edge.
 
-HẢI ĐỒ MBTILES
-- Nút ▤ > "Nạp tệp .mbtiles": chọn một hoặc nhiều tệp (giữ phím Ctrl để chọn nhiều).
+HẢI ĐỒ
+- Nút ▤ > "＋ Chèn hải đồ": chọn một hoặc nhiều tệp (giữ phím Ctrl để chọn nhiều).
+- Các dạng đọc được:
+  * MBTiles (.mbtiles) – SAS Planet, MOBAC, QGIS...
+  * BSB/KAP (.kap) – hải đồ raster NOAA, UKHO, hải đồ quét có toạ độ. Lần đầu mở mỗi tệp
+    chương trình giải mã ảnh (vài giây), sau đó hiển thị nhanh.
+  * SQLiteDB (.sqlitedb) – định dạng của RMaps, OsmAnd, Locus.
 - Trên máy tính, tệp được dùng ngay tại chỗ, KHÔNG chép. Đừng di chuyển hay xoá tệp gốc.
   Nút "Xoá" trong app chỉ gỡ tệp khỏi danh sách.
 
