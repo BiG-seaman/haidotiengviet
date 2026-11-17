@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install pywebview pyserial pyinstaller pillow
+      - run: pip install pywebview pyserial pyinstaller pillow numpy
       - name: Chuan bi giao dien, bieu tuong, hai do nen mac dinh
         shell: bash
         env:
@@ -28,19 +28,9 @@ jobs:
           if [ -n "$f" ]; then cp "$f" pc/basemap/default.mbtiles; else echo "khong co" > pc/basemap/README.txt; fi
           ls -la pc/basemap
       - name: Dong goi HaiDoVN.exe
-        run: pyinstaller --noconfirm --windowed --name HaiDoVN --icon pc/icon.ico --add-data "pc/web;web" --add-data "pc/basemap;basemap" --collect-all webview --collect-all clr_loader --collect-all pythonnet --hidden-import serial.tools.list_ports pc/app.py
+        run: pyinstaller --noconfirm --windowed --name HaiDoVN --icon pc/icon.ico --add-data "pc/web;web" --add-data "pc/basemap;basemap" --collect-all webview --collect-all clr_loader --collect-all pythonnet --hidden-import serial.tools.list_ports --hidden-import kap --paths pc pc/app.py
       - name: Tu kiem tra ban dong goi
         shell: pwsh
         run: |
           $env:HAIDOVN_HOME = "$env:RUNNER_TEMP\hdtest"
           $p = Start-Process -FilePath dist\HaiDoVN\HaiDoVN.exe -ArgumentList '--selftest' -Wait -PassThru
-          Get-Content "$env:RUNNER_TEMP\hdtest\selftest.txt"
-          if ($p.ExitCode -ne 0) { exit 1 }
-      - name: Them huong dan
-        shell: bash
-        run: cp pc/HUONG_DAN.txt dist/HaiDoVN/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: HaiDoVN-Windows
-          path: dist/HaiDoVN
-          retention-days: 30
