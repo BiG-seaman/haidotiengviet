@@ -650,6 +650,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if p == "/api/load":
                 f = key_file(q.get("k", ""))
                 return self.send(200, open(f, "rb").read()) if os.path.exists(f) else self.send(204)
+            if p == "/api/drive_state":
+                return self.send(200, json.dumps(drive_meta(), ensure_ascii=False).encode("utf-8"), "application/json")
             if p == "/api/deviceid":
                 return self.send(200, device_id().encode("utf-8"), "text/plain; charset=utf-8")
             if p == "/api/charts":
@@ -734,6 +736,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if p == "/api/ais_disconnect":
                 NMEA.disconnect()
                 return self.send(204)
+            if p == "/api/drive_download":
+                if DRIVE["busy"]:
+                    toast("Đang tải hải đồ, vui lòng đợi…")
+                    return self.send(204)
+                DRIVE["busy"] = True
+                DRIVE["cancel"] = False
+                threading.Thread(target=drive_run, args=(b,), daemon=True).start()
+                return self.send(204)
+            if p == "/api/drive_cancel":
+                DRIVE["cancel"] = True
+                return self.send(204)
             return self.send(404)
         except Exception as e:
             log("POST", p, e)
@@ -741,6 +754,98 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send(500, str(e).encode("utf-8"))
             except Exception:
                 pass
+
+
+# ---------------- Tải hải đồ từ kho Google Drive ----------------
+DRIVE = {"busy": False, "cancel": False}
+DRIVE_DIR = os.path.join(ROOT, "charts")
+
+
+def drive_meta():
+    try:
+        return json.load(open(os.path.join(DRIVE_DIR, ".drive.json"), encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def drive_one(fid, name, out, idx, total):
+    part = out + ".part"
+    url = "https://drive.usercontent.google.com/download?id=" + urllib.parse.quote(fid) + "&export=download&confirm=t"
+    for attempt in range(4):
+        if DRIVE["cancel"]:
+            return "Đã dừng"
+        try:
+            have = os.path.getsize(part) if os.path.exists(part) else 0
+            req = urllib.request.Request(url, headers={"User-Agent": UA, **({"Range": "bytes=%d-" % have} if have else {})})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                if (r.headers.get("Content-Type") or "").startswith("text/html"):
+                    return "Google Drive không cho tải (tệp chưa chia sẻ công khai hoặc đã quá lượt tải trong ngày)"
+                if r.status == 200:
+                    have = 0
+                ln = int(r.headers.get("Content-Length") or -1)
+                size = have + ln if ln > 0 else -1
+                done, last = have, 0
+                with open(part, "ab" if have else "wb") as o:
+                    while True:
+                        if DRIVE["cancel"]:
+                            return "Đã dừng"
+                        d = r.read(1 << 18)
+                        if not d:
+                            break
+                        o.write(d)
+                        done += len(d)
+                        if time.time() - last > 0.5:
+                            last = time.time()
+                            EV.send("onDriveProgress", idx, total, name, done, size)
+            if size > 0 and os.path.getsize(part) < size:
+                raise IOError("mất kết nối")
+            cid = re.sub(r"(?i)\.(mbtiles|kap|sqlitedb)$", "", name)
+            for k, v in list(CHARTS.items.items()):
+                if os.path.normcase(v["path"]) == os.path.normcase(out):
+                    CHARTS.remove(k, user=False)
+            os.replace(part, out)
+            if not CHARTS.open(out):
+                os.remove(out)
+                return "tệp không phải hải đồ hợp lệ"
+            m = drive_meta(); m[name] = fid
+            atomic_write(os.path.join(DRIVE_DIR, ".drive.json"), json.dumps(m, ensure_ascii=False).encode("utf-8"))
+            EV.send("onChartsChanged")
+            return None
+        except Exception as e:
+            if attempt == 3:
+                return "lỗi mạng (%s), bấm tải lại để tải tiếp" % e
+            time.sleep(3 * (attempt + 1))
+    return "Đã dừng"
+
+
+def drive_run(body):
+    ok = skip = fail = 0
+    err = ""
+    try:
+        os.makedirs(DRIVE_DIR, exist_ok=True)
+        items = json.loads(body or "[]")
+        for i, f in enumerate(items):
+            if DRIVE["cancel"]:
+                break
+            name = re.sub(r'[\\/:*?"<>|]', "_", str(f.get("name", ""))).strip()
+            if not re.search(r"(?i)\.(mbtiles|kap|sqlitedb)$", name):
+                continue
+            out = os.path.join(DRIVE_DIR, name)
+            if os.path.exists(out) and drive_meta().get(name) == f.get("id"):
+                skip += 1
+                continue
+            e = drive_one(str(f.get("id")), name, out, i + 1, len(items))
+            if e is None:
+                ok += 1
+            else:
+                fail += 1
+                err = err or (name + ": " + e)
+    except Exception as e:
+        err = str(e)
+    finally:
+        DRIVE["busy"] = False
+    EV.send("onDriveDone", ok, skip, fail, "Đã dừng tải" if DRIVE["cancel"] else err)
+    EV.send("onChartsChanged")
 
 
 def device_id():
