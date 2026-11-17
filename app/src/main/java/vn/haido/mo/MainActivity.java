@@ -743,6 +743,93 @@ public class MainActivity extends Activity implements LocationListener {
         return null;
     }
 
+    // ---------- Tải hải đồ từ Google Drive ----------
+    volatile boolean dlBusy = false, dlCancel = false;
+
+    File driveMetaFile() { return new File(chartDir(), ".drive.json"); }
+    synchronized JSONObject driveMeta() {
+        try { return new JSONObject(new String(readAll(new FileInputStream(driveMetaFile())), StandardCharsets.UTF_8)); }
+        catch (Exception e) { return new JSONObject(); }
+    }
+    synchronized void driveMetaPut(String name, String id) {
+        try {
+            JSONObject m = driveMeta(); m.put(name, id);
+            FileOutputStream o = new FileOutputStream(driveMetaFile()); o.write(m.toString().getBytes(StandardCharsets.UTF_8)); o.close();
+        } catch (Exception ignored) {}
+    }
+
+    void driveRun(String json) {
+        int ok = 0, skip = 0, fail = 0;
+        String err = "";
+        try {
+            JSONArray a = new JSONArray(json);
+            int n = a.length();
+            for (int i = 0; i < n && !dlCancel; i++) {
+                JSONObject f = a.getJSONObject(i);
+                String fid = f.getString("id");
+                String name = f.getString("name").replaceAll("[^\\p{L}\\p{N}._ &()-]", "_");
+                if (!name.matches("(?i).*\\.(mbtiles|kap|sqlitedb)$")) continue;
+                File out = new File(chartDir(), name);
+                if (out.exists() && fid.equals(driveMeta().optString(name))) { skip++; continue; }
+                String e = driveOne(fid, name, out, i + 1, n);
+                if (e == null) ok++; else { fail++; if (err.isEmpty()) err = name + ": " + e; }
+            }
+        } catch (Exception e) { err = e.getMessage(); }
+        js("window.onDriveDone&&onDriveDone(" + ok + "," + skip + "," + fail + "," + JSONObject.quote(dlCancel ? "Đã dừng tải" : err) + ")");
+        js("window.onChartsChanged&&onChartsChanged()");
+    }
+
+    // tải một tệp; trả về null nếu xong, hoặc lý do lỗi. Có tải tiếp phần dở (mất sóng giữa chừng)
+    String driveOne(String fid, String name, File out, int idx, int total) {
+        File part = new File(out.getPath() + ".part");
+        for (int attempt = 0; attempt < 4 && !dlCancel; attempt++) {
+            HttpURLConnection c = null;
+            try {
+                long have = part.exists() ? part.length() : 0;
+                c = (HttpURLConnection) new URL("https://drive.usercontent.google.com/download?id=" + fid + "&export=download&confirm=t").openConnection();
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(30000);
+                c.setRequestProperty("User-Agent", UA);
+                if (have > 0) c.setRequestProperty("Range", "bytes=" + have + "-");
+                int code = c.getResponseCode();
+                String ct = String.valueOf(c.getContentType());
+                if (ct.startsWith("text/html")) return "Google Drive không cho tải (tệp chưa chia sẻ công khai hoặc đã quá lượt tải trong ngày)";
+                if (code != 200 && code != 206) throw new Exception("HTTP " + code);
+                if (code == 200) have = 0;
+                long len = c.getContentLengthLong(), size = len > 0 ? have + len : -1;
+                InputStream in = c.getInputStream();
+                OutputStream o = new FileOutputStream(part, have > 0);
+                byte[] buf = new byte[1 << 18];
+                long done = have, lastT = 0;
+                int r;
+                while ((r = in.read(buf)) > 0) {
+                    if (dlCancel) break;
+                    o.write(buf, 0, r);
+                    done += r;
+                    long now = System.currentTimeMillis();
+                    if (now - lastT > 500) { lastT = now; js("window.onDriveProgress&&onDriveProgress(" + idx + "," + total + "," + JSONObject.quote(name) + "," + done + "," + size + ")"); }
+                }
+                o.close(); in.close();
+                if (dlCancel) return "Đã dừng";
+                if (size > 0 && part.length() < size) throw new Exception("mất kết nối");
+                // thay tệp cũ cùng tên (nếu đang mở thì đóng trước)
+                String cid = name.replaceAll(EXT_RE, "");
+                infos.remove(cid); closePool(cid);
+                for (String e2 : new String[]{".mbtiles", ".kap", ".sqlitedb"}) new File(chartDir(), cid + e2).delete();
+                new File(out.getPath() + ".zooms.json").delete();
+                if (!part.renameTo(out)) return "không ghi được tệp";
+                if (!openChart(out)) { out.delete(); return "tệp không phải hải đồ hợp lệ"; }
+                driveMetaPut(name, fid);
+                js("window.onChartsChanged&&onChartsChanged()");
+                return null;
+            } catch (Exception e) {
+                if (attempt == 3) return "lỗi mạng (" + e.getMessage() + "), bấm tải lại để tải tiếp";
+                try { Thread.sleep(3000L * (attempt + 1)); } catch (InterruptedException ignored) {}
+            } finally { if (c != null) c.disconnect(); }
+        }
+        return "Đã dừng";
+    }
+
     // ---------- chọn / lưu tệp ----------
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
@@ -910,6 +997,15 @@ public class MainActivity extends Activity implements LocationListener {
         }
 
         @JavascriptInterface public void pickMbtiles() { ui.post(() -> pick(REQ_MBT)); }
+
+        // ---- Kho hải đồ trên Google Drive ----
+        @JavascriptInterface public void driveDownload(final String json) {
+            if (dlBusy) { toast("Đang tải hải đồ, vui lòng đợi…"); return; }
+            dlBusy = true; dlCancel = false;
+            new Thread(() -> { try { driveRun(json); } finally { dlBusy = false; } }).start();
+        }
+        @JavascriptInterface public void driveCancel() { dlCancel = true; }
+        @JavascriptInterface public String driveState() { return driveMeta().toString(); }
 
         @JavascriptInterface public void deleteChart(String id) {
             infos.remove(id);
