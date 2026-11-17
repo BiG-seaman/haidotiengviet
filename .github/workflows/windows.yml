@@ -15,13 +15,20 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pywebview pyserial pyinstaller pillow
-      - name: Chuan bi giao dien va bieu tuong
+      - name: Chuan bi giao dien, bieu tuong, hai do nen mac dinh
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           cp app/src/main/assets/index.html pc/web/index.html
           python pc/make_icon.py pc/icon.ico
+          mkdir -p pc/basemap /tmp/basemap
+          gh release download basemap --repo "${{ github.repository }}" --pattern "*.mbtiles" --dir /tmp/basemap || echo "Chua co hai do nen mac dinh trong Releases (tag basemap)"
+          f=$(ls /tmp/basemap/*.mbtiles 2>/dev/null | head -1)
+          if [ -n "$f" ]; then cp "$f" pc/basemap/default.mbtiles; else echo "khong co" > pc/basemap/README.txt; fi
+          ls -la pc/basemap
       - name: Dong goi HaiDoVN.exe
-        run: pyinstaller --noconfirm --windowed --name HaiDoVN --icon pc/icon.ico --add-data "pc/web;web" --collect-all webview --collect-all clr_loader --collect-all pythonnet --hidden-import serial.tools.list_ports pc/app.py
+        run: pyinstaller --noconfirm --windowed --name HaiDoVN --icon pc/icon.ico --add-data "pc/web;web" --add-data "pc/basemap;basemap" --collect-all webview --collect-all clr_loader --collect-all pythonnet --hidden-import serial.tools.list_ports pc/app.py
       - name: Tu kiem tra ban dong goi
         shell: pwsh
         run: |
