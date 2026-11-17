@@ -1,0 +1,6 @@
+# THÔNG BÁO GỬI TỚI MỌI MÁY CÀI HẢI ĐỒ VN
+# - Mỗi dòng bắt đầu bằng @thongbao: là một thông báo, hiện thành ô 📢 trên màn hình chính, 3 phút một lần.
+# - Nhiều dòng thì app hiện lần lượt từng dòng. Xoá hết các dòng @thongbao: để tắt thông báo.
+# - Dòng bắt đầu bằng # là ghi chú, không hiện lên app.
+# - Sửa tệp này trên GitHub rồi bấm Commit changes; các máy có mạng sẽ nhận nội dung mới trong vòng khoảng 15 phút.
+@thongbao: Cài phần mềm hàng hải, hải đồ tiếng Việt, AIS Pilot Plug Wi‑Fi, iPad, máy tính bảng – liên hệ Mr Công 0586 568 569
