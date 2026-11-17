@@ -21,8 +21,11 @@
     ready:()=>{}
   };
   // sự kiện từ phần lõi: NMEA, trạng thái kết nối, thông báo, hải đồ thay đổi
+  const early=[]; const run=m=>{ try{ const f=window[m.fn]; if(typeof f==='function') f.apply(null,m.args||[]); }catch(_){} };
+  window.addEventListener('load',()=>{ setTimeout(()=>{ while(early.length) run(early.shift()); },300); });
   function listen(){ const es=new EventSource('/api/events');
-    es.onmessage=e=>{ try{ const m=JSON.parse(e.data), f=window[m.fn]; if(typeof f==='function') f.apply(null,m.args||[]); }catch(_){} };
+    es.onmessage=e=>{ let m; try{ m=JSON.parse(e.data); }catch(_){ return; }
+      if(document.readyState!=='complete'){ early.push(m); return; } run(m); };
     es.onerror=()=>{ es.close(); setTimeout(listen,3000); }; }
   listen();
   // GPS của máy tính (nếu Windows có dịch vụ vị trí) – GPS tàu qua Wi-Fi/COM vẫn được ưu tiên ở chế độ Tự động
