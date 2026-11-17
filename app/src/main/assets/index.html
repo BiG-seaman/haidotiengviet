@@ -12,7 +12,9 @@ body.night canvas#map{filter:brightness(.45) sepia(.5) hue-rotate(-30deg)}
 #top{position:absolute;top:0;left:0;right:0;background:rgba(8,28,44,.88);padding:6px 10px;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;z-index:5}
 #top .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
 #top .l{font-size:11px;color:#8fb3c9;margin-right:4px}
-#top .pos{font-size:13px;font-variant-numeric:tabular-nums;color:#cfe3ef;margin-left:auto}
+#top .pos{font-size:13px;font-variant-numeric:tabular-nums;color:#cfe3ef;margin-left:auto;display:flex;align-items:center;gap:8px;align-self:center}
+#top .pos .ll{display:flex;flex-direction:column;align-items:flex-end;line-height:1.25;font-size:14px}
+#top .pos .l{margin:0;text-align:right;line-height:1.2}
 #navrow{width:100%;display:none;border-top:1px solid #24465c;padding-top:4px;gap:4px 14px;flex-wrap:wrap;align-items:baseline}
 #navrow .v{color:#ffd54a}
 #btns{position:absolute;right:10px;bottom:28px;display:flex;flex-direction:column;gap:10px;z-index:5}
@@ -55,9 +57,9 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 #banner.ack{background:#e07b00}
 #banner button{font-size:14px}
 .info p{margin:8px 0}
-#notice{position:absolute;left:10px;right:74px;top:60px;background:#fff3c4;color:#3b2a00;border-left:5px solid #f5b400;border-radius:10px;padding:10px 34px 10px 12px;font-size:15px;line-height:1.35;display:none;z-index:7;box-shadow:0 3px 10px rgba(0,0,0,.35);cursor:pointer;animation:ntIn .35s ease-out}
+#notice{position:absolute;left:10px;right:74px;bottom:96px;background:#fff3c4;color:#3b2a00;border-left:5px solid #f5b400;border-radius:10px;padding:10px 34px 10px 12px;font-size:15px;line-height:1.35;display:none;z-index:7;box-shadow:0 3px 10px rgba(0,0,0,.35);cursor:pointer;animation:ntIn .35s ease-out}
 #notice .x{position:absolute;right:4px;top:2px;border:0;background:none;font-size:20px;color:#7a5a00;padding:4px 8px;cursor:pointer}
-@keyframes ntIn{from{transform:translateY(-12px);opacity:0}to{transform:none;opacity:1}}
+@keyframes ntIn{from{transform:translateY(12px);opacity:0}to{transform:none;opacity:1}}
 #tidebox{position:absolute;left:10px;bottom:52px;background:rgba(8,28,44,.9);color:#eaf2f7;padding:7px 11px;border-radius:18px;font-size:14px;display:none;z-index:4;box-shadow:0 2px 6px rgba(0,0,0,.35);max-width:calc(100% - 90px)}
 @media (min-width:900px){   /* màn hình máy tính: bảng nổi bên trái thay vì trải hết chiều ngang */
   #panel{left:12px;right:auto;bottom:12px;width:440px;max-height:calc(100% - 130px);border-radius:16px}
@@ -77,7 +79,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
   <div id="bhdg" style="display:none"><span class="l">MŨI</span><span class="v" id="hdg">--</span><span class="l">°</span></div>
   <div id="brot" style="display:none"><span class="l">ROT</span><span class="v" id="rot">--</span><span class="l">°/ph</span></div>
   <div id="bdep" style="display:none"><span class="l">SÂU</span><span class="v" id="dep">--</span><span class="l">m</span></div>
-  <div class="pos"><span class="l" id="srctag"></span> <span id="pos">Chưa có GPS</span></div>
+  <div class="pos"><span class="l" id="srctag"></span><span class="ll" id="pos">Chưa có GPS</span></div>
   <div id="navrow">
     <div><span class="l" id="navname">ĐẾN</span></div>
     <div><span class="l">P.VỊ</span><span class="v" id="nbrg">--</span><span class="l">°</span></div>
@@ -123,7 +125,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name',
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.11';
+const APP_VER='1.12';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -139,6 +141,7 @@ function fmtDM(v,pos,neg){ const h=v>=0?pos:neg; v=Math.abs(v); const d=Math.flo
 function dmsParts(v){ v=Math.abs(v); let d=Math.floor(v); const mf=(v-d)*60; let m=Math.floor(mf), s=Math.round((mf-m)*600)/10;
   if(s>=60){ s=0; m++; } if(m>=60){ m=0; d++; } return [d,m,s]; }
 function fmtDMS(v,pos,neg){ const [d,m,s]=dmsParts(v); return d+'°'+String(m).padStart(2,'0')+'\''+(s<10?'0':'')+s.toFixed(1)+'"'+(v>=0?pos:neg); }
+const fmtPos2 = p => '<span>'+(set.fmt==='dm'?fmtDM(p.lat,'N','S'):fmtDMS(p.lat,'N','S'))+'</span><span>'+(set.fmt==='dm'?fmtDM(p.lon,'E','W'):fmtDMS(p.lon,'E','W'))+'</span>';
 const fmtPos = p => set.fmt==='dm' ? fmtDM(p.lat,'N','S')+'  '+fmtDM(p.lon,'E','W') : fmtDMS(p.lat,'N','S')+'  '+fmtDMS(p.lon,'E','W');
 // cross-track: dương = tàu lệch sang phải đường A→B
 function xteNm(a,b,p){ const d13=distNm(a,p)/R_NM, t13=bearing(a,p)*D2R, t12=bearing(a,b)*D2R; return Math.asin(Math.sin(d13)*Math.sin(t13-t12))*R_NM; }
@@ -439,8 +442,8 @@ function applyFix(){ const src=curSrc(), f=src==='ship'?shipFix:phoneFix;
   if(!tideAuto||distNm(tideAuto.p,fix)>10) autoTide(); }
 function updTop(){ const show=(id,on)=>{ $(id).style.display=on?'':'none'; };
   if(!fix){ $('sog').textContent='--'; $('cog').textContent='--'; $('pos').textContent=curSrc()==='ship'?'Chưa có GPS tàu':'Chưa có GPS'; $('srctag').textContent=''; }
-  else { $('sog').textContent=fix.sog.toFixed(1); $('cog').textContent=fix.cog!=null?fmt3(fix.cog):'--'; $('pos').textContent=fmtPos(fix);
-    const stale=!fresh(fix.t,6000); $('srctag').textContent=(fix.src==='ship'?'GPS TÀU':'GPS MÁY')+(stale?' ⚠ MẤT TÍN HIỆU':''); $('srctag').style.color=stale?'#ff8a80':''; }
+  else { $('sog').textContent=fix.sog.toFixed(1); $('cog').textContent=fix.cog!=null?fmt3(fix.cog):'--'; $('pos').innerHTML=fmtPos2(fix);
+    const stale=!fresh(fix.t,6000); $('srctag').innerHTML=(fix.src==='ship'?'GPS<br>TÀU':'GPS<br>MÁY')+(stale?'<br>⚠ MẤT':''); $('srctag').style.color=stale?'#ff8a80':''; }
   const h=fresh(ship.hdgT,10000), r=fresh(ship.rotT,10000), d=fresh(ship.depthT,10000);
   show('bhdg',h); if(h) $('hdg').textContent=fmt3(ship.hdg);
   show('brot',r); if(r) $('rot').textContent=(ship.rot>0?'+':'')+ship.rot.toFixed(Math.abs(ship.rot)<10?1:0);
@@ -624,30 +627,30 @@ function clearAnchor(){ anchor=null; store.save('anchor',null); setAlarm('anchor
 function checkAnchor(){ if(!anchor||!fix) return; const d=distNm(anchor,fix)*1852;
   setAlarm('anchor', d>anchor.r ? `TRÔI NEO! Cách điểm neo ${Math.round(d)} m` : null); }
 
-/* ================= Lớp hải đồ & MBTiles ================= */
+/* ================= Hải đồ (MBTiles, KAP, SQLiteDB) ================= */
 function refreshCharts(){ try{ charts = NA ? JSON.parse(NA.listCharts()) : []; }catch(e){ charts=[]; } redraw(); }
-window.onChartsChanged=function(newId){ refreshCharts(); if(newId){ set.charts[newId]=true; saveSet(); const c=charts.find(c=>c.id===newId); if(c){ if(c.bounds) fitBounds(c.bounds); if(S.zoom<c.minzoom){ S.zoom=c.minzoom; redraw(); } } } if($('panel').style.display==='flex'&&$('panel').dataset.t==='Lớp hải đồ') showLayers(); };
-window.onImportProgress=function(pct,name){ toast('Đang nạp '+name+'… '+pct+'%'); };
+window.onChartsChanged=function(newId){ refreshCharts(); if(newId){ set.charts[newId]=true; saveSet(); const c=charts.find(c=>c.id===newId); if(c){ if(c.bounds) fitBounds(c.bounds); if(S.zoom<c.minzoom){ S.zoom=c.minzoom; redraw(); } } } if($('panel').style.display==='flex'&&$('panel').dataset.t==='Hải đồ') showLayers(); };
+window.onImportProgress=function(pct,name){ toast('Đang chèn '+name+'… '+pct+'%'); };
 window.onToast=toast;
 function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm?'checked':''} onchange="set.osm=this.checked;saveSet();redraw()">Bản đồ nền OpenStreetMap</label>
   <label class="sw"><input type="checkbox" ${set.sea?'checked':''} onchange="set.sea=this.checked;saveSet();redraw()">Phao tiêu, đèn biển (OpenSeaMap)</label>
   <label class="sw"><input type="checkbox" ${set.night?'checked':''} onchange="set.night=this.checked;saveSet();applyNight()">Chế độ ban đêm</label>
   <label class="sw"><input type="checkbox" ${set.tideBox!==false?'checked':''} onchange="setTideBox(this.checked)">Hiện thủy triều trên hải đồ (tự tải khi có mạng)</label>
-  <div class="cl" style="margin-top:10px">Hiển thị toạ độ</div><select onchange="set.fmt=this.value;saveSet();if(fix)$('pos').textContent=fmtPos(fix)"><option value="dms" ${set.fmt!=='dm'?'selected':''}>Độ° phút' giây" (10°21'30.0"N)</option><option value="dm" ${set.fmt==='dm'?'selected':''}>Độ° phút' thập phân (10°21.500'N)</option></select>
+  <div class="cl" style="margin-top:10px">Hiển thị toạ độ</div><select onchange="set.fmt=this.value;saveSet();if(fix)$('pos').innerHTML=fmtPos2(fix)"><option value="dms" ${set.fmt!=='dm'?'selected':''}>Độ° phút' giây" (10°21'30.0"N)</option><option value="dm" ${set.fmt==='dm'?'selected':''}>Độ° phút' thập phân (10°21.500'N)</option></select>
   <p class="note">Hai lớp trên cần mạng lần đầu; các vùng đã xem được lưu lại để dùng khi ra khơi.</p>
   <div class="cl" style="margin-top:10px">Hiệu năng tải bản đồ</div><select onchange="setPerf(this.value)">
    <option value="max" ${P.mode==='max'?'selected':''}>Tối đa – dùng khoảng 75% phần cứng, tải trước nhiều nhất</option>
    <option value="bal" ${P.mode==='bal'?'selected':''}>Cân bằng</option>
    <option value="eco" ${P.mode==='eco'?'selected':''}>Tiết kiệm pin</option></select>
   <p class="note">Máy: ${HW.cores} nhân CPU, ~${HW.mem} GB RAM → tải ${P.maxc} ô cùng lúc, giữ sẵn ${P.maxt} ô (~${Math.round(P.maxt/4)} MB)${P.out?', tải trước '+P.out+' mức thu nhỏ':''}. Mức Tối đa làm máy ấm và tốn pin hơn.</p>
-  <h3 style="margin:14px 0 4px">Hải đồ MBTiles của bạn</h3>`;
+  <h3 style="margin:14px 0 4px">Hải đồ của bạn</h3>`;
   const oc=orderedCharts().reverse();   // hiển thị lớp trên cùng trước
   h+=oc.length?oc.map((c,i)=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Zoom '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div>`+
     (oc.length>1?`<button class="b" ${i===0?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',1)">▲</button><button class="b" ${i===oc.length-1?'disabled style="opacity:.35"':''} onclick="moveChart('${esc(c.id)}',-1)">▼</button>`:'')+
-    `<button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa nạp tệp nào.</p>';
+    `<button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có hải đồ nào. Bấm Chèn hải đồ bên dưới.</p>';
   if(oc.length>1) h+=`<p class="note">Tệp ở trên được vẽ đè lên tệp ở dưới. Mặc định app tự xếp tệp chi tiết (zoom cao) lên trên, tệp tổng quát (zoom thấp) xuống dưới, nên khi phóng to thu nhỏ app tự chuyển sang tệp phù hợp. ${set.chartOrder?'<a href="#" onclick="autoOrder();return false" style="color:#7cc4ff">Xếp lại tự động</a>':''}</p>`;
-  h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Nạp tệp .mbtiles (chọn được nhiều tệp)</button></div><p class="note">Chọn nhiều tệp: trong trình chọn tệp, nhấn giữ một tệp rồi chạm thêm các tệp khác, sau đó bấm Chọn/Mở. Hỗ trợ MBTiles dạng ảnh (PNG, JPG, WebP). ${PC?'Trên máy tính, tệp được dùng ngay tại chỗ (không chép); đừng di chuyển hay xoá tệp gốc. Giữ phím Ctrl để chọn nhiều tệp. Nút Xoá chỉ gỡ khỏi danh sách, không xoá tệp.':'Tệp được chép vào bộ nhớ riêng của app; sau khi nạp xong có thể xoá tệp gốc.'}</p>`;
-  openPanel('Lớp hải đồ',h); }
+  h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Chèn hải đồ</button></div><p class="note">Chọn nhiều tệp: trong trình chọn tệp, nhấn giữ một tệp rồi chạm thêm các tệp khác, sau đó bấm Chọn/Mở. Các dạng hải đồ chèn được: <b>MBTiles</b> (.mbtiles, ảnh PNG/JPG/WebP), <b>KAP/BSB</b> (.kap – hải đồ quét như OpenCPN, NOAA), <b>SQLiteDB</b> (.sqlitedb – RMaps, OsmAnd). ${PC?'Trên máy tính, tệp được dùng ngay tại chỗ (không chép); đừng di chuyển hay xoá tệp gốc. Giữ phím Ctrl để chọn nhiều tệp. Nút Xoá chỉ gỡ khỏi danh sách, không xoá tệp.':'Tệp được chép vào bộ nhớ riêng của app; sau khi chèn xong có thể xoá tệp gốc.'}</p>`;
+  openPanel('Hải đồ',h); }
 function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
 function zoomChart(id){ const c=charts.find(c=>c.id===id); if(c&&c.bounds){ closePanel(); fitBounds(c.bounds); if(S.zoom<c.minzoom) S.zoom=c.minzoom; redraw(); } }
 function delChart(id){ confirmBox('Xoá hải đồ này khỏi app?',()=>{ if(NA) NA.deleteChart(id); delete set.charts[id]; saveSet(); for(const [k,v] of [...tiles]) if(k.startsWith('m_'+id+'/')){ if(v.img&&v.img.close) v.img.close(); tiles.delete(k); } refreshCharts(); showLayers(); }); }
@@ -861,7 +864,7 @@ function showMenu(){ openPanel('Chức năng',`<div class="grid">
   <button class="b" onclick="showWpts()">📍 Điểm đánh dấu</button><button class="b" onclick="showRoutes()">〰 Tuyến đường</button>
   <button class="b" onclick="showTracks()">👣 Vết đi${rec?' (đang ghi)':''}</button><button class="b" onclick="startMode('measure')">📏 Đo khoảng cách</button>
   <button class="b" onclick="showAlarms()">⚠ Báo động${Object.keys(alm).length?' (!)':''}</button><button class="b" onclick="showWeather()">🌬 Thời tiết biển</button>
-  <button class="b" onclick="showAis()">📡 AIS</button><button class="b" onclick="showLayers()">▤ Lớp hải đồ</button>
+  <button class="b" onclick="showAis()">📡 AIS</button><button class="b" onclick="showLayers()">▤ Hải đồ</button>
   <button class="b" onclick="showGpx()">⇅ Nhập / Xuất GPX</button><button class="b" onclick="showInfo()">ℹ Thông tin</button></div>
   <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem dự báo tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
 function showGpx(){ openPanel('Nhập / Xuất GPX',`<div class="grid"><button class="b p" onclick="NA?NA.importGpx():toast('Chỉ dùng được trong app Android')">⬇ Nhập tệp GPX</button><button class="b p" onclick="exportGpx()">⬆ Xuất tệp GPX</button></div>
@@ -887,7 +890,7 @@ async function fetchNotices(){ if(navigator.onLine===false) return;
 function showNotice(){ if(!notices.length) return;
   if(Object.keys(alm).length||$('modal').style.display==='flex') return;      // không che báo động / hộp thoại
   const t=notices[noticeIdx%notices.length]; noticeIdx++;
-  $('ntext').textContent='📢 '+t; const n=$('notice'); n.style.top=($('top').offsetHeight+8)+'px';
+  $('ntext').textContent='📢 '+t; const n=$('notice');
   n.style.display='none'; void n.offsetWidth; n.style.display='block';
   clearTimeout(noticeT); noticeT=setTimeout(hideNotice,20000); }
 function hideNotice(e){ if(e) e.stopPropagation(); clearTimeout(noticeT); $('notice').style.display='none'; }
