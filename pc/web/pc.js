@@ -18,6 +18,9 @@
     aisDisconnect:()=>{ post('/api/ais_disconnect'); },
     openUrl:u=>{ post('/api/open_url',u); },
     listSerial:()=>{ try{ const x=sx('GET','/api/serial_ports'); return x.status===200?x.responseText:'[]'; }catch(e){ return '[]'; } },
+    driveDownload:j=>{ post('/api/drive_download',j); },
+    driveCancel:()=>{ post('/api/drive_cancel'); },
+    driveState:()=>{ try{ const x=sx('GET','/api/drive_state'); return x.status===200?x.responseText:'{}'; }catch(e){ return '{}'; } },
     deviceId:()=>{ try{ const x=sx('GET','/api/deviceid'); return x.status===200?x.responseText:''; }catch(e){ return ''; } },
     ready:()=>{}
   };
