@@ -49,6 +49,7 @@ label.sw input{width:22px;height:22px}
 #lock h2{margin:0 0 8px;font-size:20px}#lock .id{font-family:ui-monospace,monospace;font-size:22px;letter-spacing:1px;background:#0a1a27;border-radius:10px;padding:10px;text-align:center;margin:6px 0}
 #lock input{width:100%;box-sizing:border-box;font-size:17px;padding:12px;border-radius:10px;border:1px solid #2f5672;background:#0a1a27;color:#fff;text-transform:uppercase}
 #lock .msg{min-height:20px;color:#ffd54a;margin:8px 0}
+#dlbox{position:absolute;left:10px;right:74px;top:120px;background:rgba(8,28,44,.95);border-radius:12px;padding:10px 12px;display:none;gap:10px;align-items:center;z-index:8;font-size:14px;box-shadow:0 3px 10px rgba(0,0,0,.4)}
 #toast{position:absolute;left:50%;transform:translateX(-50%);bottom:110px;background:rgba(0,0,0,.85);padding:9px 16px;border-radius:20px;display:none;z-index:30;max-width:86%;text-align:center}
 table.w{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
 table.w td,table.w th{padding:6px 4px;border-bottom:1px solid #1d3d52;text-align:right}
@@ -111,6 +112,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 <div id="panel"></div>
 <div id="modal"></div>
 <div id="lock"><div class="card"><h2>🔑 Hải đồ VN</h2><p id="lockmsg">Đang kiểm tra bản quyền…</p></div></div>
+<div id="dlbox"></div>
 <div id="toast"></div>
 <script>
 'use strict';
@@ -132,7 +134,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name', planKn:6,
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.14';
+const APP_VER='1.15';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -707,6 +709,8 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
    <option value="bal" ${P.mode==='bal'?'selected':''}>Cân bằng</option>
    <option value="eco" ${P.mode==='eco'?'selected':''}>Tiết kiệm pin</option></select>
   <p class="note">Máy: ${HW.cores} nhân CPU, ~${HW.mem} GB RAM → tải ${P.maxc} ô cùng lúc, giữ sẵn ${P.maxt} ô (~${Math.round(P.maxt/4)} MB)${P.out?', tải trước '+P.out+' mức thu nhỏ':''}. Mức Tối đa làm máy ấm và tốn pin hơn.</p>
+  <h3 style="margin:14px 0 4px">☁ Tải hải đồ từ kho</h3><div class="grid" id="drvcats">${drvCatsHtml()}</div>
+  <p class="note">Bấm một mục để tải về toàn bộ hải đồ của mục đó (nên dùng Wi‑Fi). Tệp đã có sẽ được bỏ qua; mất sóng giữa chừng thì bấm lại để tải tiếp.</p>
   <h3 style="margin:14px 0 4px">Hải đồ của bạn</h3>`;
   const oc=orderedCharts().reverse();   // hiển thị lớp trên cùng trước
   h+=oc.length?oc.map((c,i)=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Zoom '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div>`+
@@ -714,7 +718,36 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
     `<button class="b r" onclick="delChart('${esc(c.id)}')">Xoá</button></div>`).join(''):'<p class="note">Chưa có hải đồ nào. Bấm Chèn hải đồ bên dưới.</p>';
   if(oc.length>1) h+=`<p class="note">Tệp ở trên được vẽ đè lên tệp ở dưới. Mặc định app tự xếp tệp chi tiết (zoom cao) lên trên, tệp tổng quát (zoom thấp) xuống dưới, nên khi phóng to thu nhỏ app tự chuyển sang tệp phù hợp. ${set.chartOrder?'<a href="#" onclick="autoOrder();return false" style="color:#7cc4ff">Xếp lại tự động</a>':''}</p>`;
   h+=`<div class="grid"><button class="b p" onclick="pickChart()">＋ Chèn hải đồ</button></div><p class="note">Chọn nhiều tệp: trong trình chọn tệp, nhấn giữ một tệp rồi chạm thêm các tệp khác, sau đó bấm Chọn/Mở. Các dạng hải đồ chèn được: <b>MBTiles</b> (.mbtiles, ảnh PNG/JPG/WebP), <b>KAP/BSB</b> (.kap – hải đồ quét như OpenCPN, NOAA), <b>SQLiteDB</b> (.sqlitedb – RMaps, OsmAnd). ${PC?'Trên máy tính, tệp được dùng ngay tại chỗ (không chép); đừng di chuyển hay xoá tệp gốc. Giữ phím Ctrl để chọn nhiều tệp. Nút Xoá chỉ gỡ khỏi danh sách, không xoá tệp.':'Tệp được chép vào bộ nhớ riêng của app; sau khi chèn xong có thể xoá tệp gốc.'}</p>`;
-  openPanel('Hải đồ',h); }
+  openPanel('Hải đồ',h); drvLoadCats(); }
+/* ---- Kho hải đồ trên Google Drive (thư mục gán ở trang quản lý của máy chủ bản quyền) ---- */
+let drvCats=(store.load('drvcats')||{}).cats||[{key:'noidia',name:'Hải đồ nội địa'},{key:'dna',name:'Hải đồ Đông Nam Á'},{key:'chaua',name:'Hải đồ châu Á'}];
+let drvBusy=false;
+function drvCatsHtml(){ return drvCats.map(c=>`<button class="b p" onclick="drvOpen('${esc(c.key)}')">⬇ ${esc(c.name)}</button>`).join(''); }
+async function drvLoadCats(){ try{ const r=await fetch(LIC_URL+'/charts',{method:'POST',body:'{}'}); const j=await r.json(); if(j.cats){ drvCats=j.cats; store.save('drvcats',{cats:j.cats}); const e=$('drvcats'); if(e) e.innerHTML=drvCatsHtml(); } }catch(e){} }
+async function drvOpen(key){ if(drvBusy) return toast('Đang tải hải đồ…');
+  const c=drvCats.find(x=>x.key===key)||{name:''}; if(c.ready===false) return toast(c.name+': chưa có hải đồ. Liên hệ Mr Công 0586 568 569.');
+  if(!NA||!NA.driveDownload) return toast('Chỉ dùng được trong app');
+  toast('Đang lấy danh sách '+c.name+'…');
+  let j; try{ j=await (await fetch(LIC_URL+'/charts/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cat:key,id:licSt.id})})).json(); }
+  catch(e){ return toast('Không kết nối được. Cần có mạng để tải hải đồ.'); }
+  if(j.error) return toast(j.error); const files=j.files||[]; if(!files.length) return toast(c.name+': chưa có tệp nào.');
+  let have={}; try{ have=JSON.parse(NA.driveState()||'{}'); }catch(e){}
+  const safe=n=>n.replace(PC?/[\\/:*?"<>|]/g:/[^\p{L}\p{N}._ &()-]/gu,'_');
+  const todo=files.filter(f=>have[safe(f.name)]!==f.id);
+  $('toast').style.display='none'; modalCb=()=>drvStart(todo.length?todo:files, c.name);
+  $('modal').innerHTML=`<div class="box"><p><b>${esc(j.name||c.name)}</b>: ${files.length} tệp hải đồ${todo.length<files.length?`, đã có ${files.length-todo.length}`:''}.</p>
+    <div style="max-height:40vh;overflow:auto;margin:6px 0 10px;font-size:14px">${files.map(f=>`<div>${have[safe(f.name)]===f.id?'✅':'⬇'} ${esc((f.dir?f.dir+' / ':'')+f.name)}</div>`).join('')}</div>
+    <p class="note">${todo.length?'Tải '+todo.length+' tệp còn thiếu. Tệp hải đồ thường nặng (hàng trăm MB), nên dùng Wi‑Fi.':'Đã có đủ. Bấm Tải lại nếu muốn tải lại tất cả.'}</p>
+    <div class="acts"><button class="b" onclick="closeModal()">Huỷ</button><button class="b p" onclick="okModal()">${todo.length?'⬇ Tải '+todo.length+' tệp':'Tải lại'}</button></div></div>`;
+  $('modal').style.display='flex'; }
+function drvStart(list,name){ drvBusy=true; closePanel(); NA.driveDownload(JSON.stringify(list.map(f=>({id:f.id,name:f.name})))); drvBox('Bắt đầu tải '+name+'…'); }
+function drvBox(html){ const b=$('dlbox'); if(!html){ b.style.display='none'; return; } b.innerHTML=`<div style="flex:1">${html}</div><button class="b r" style="padding:6px 10px" onclick="drvCancel()">Dừng</button>`; b.style.display='flex'; }
+function drvCancel(){ if(NA&&NA.driveCancel) NA.driveCancel(); }
+const mb=x=>(x/1048576).toFixed(x<1048576*10?1:0);
+window.onDriveProgress=function(i,n,name,done,size){ drvBusy=true; const pct=size>0?Math.floor(done*100/size):null;
+  drvBox(`⬇ <b>${n>1?'('+i+'/'+n+') ':''}${esc(name)}</b><br>${pct!=null?pct+'% · ':''}${mb(done)}${size>0?' / '+mb(size):''} MB<div style="height:5px;background:#24465c;border-radius:3px;margin-top:5px"><div style="height:5px;width:${pct||0}%;background:#4fc3f7;border-radius:3px"></div></div>`); };
+window.onDriveDone=function(ok,skip,fail,err){ drvBusy=false; drvBox(null);
+  if(fail||err) toast((ok?'Đã tải '+ok+' tệp. ':'')+(err||'Có '+fail+' tệp lỗi')); else toast(ok?'Đã tải xong '+ok+' hải đồ'+(skip?' (bỏ qua '+skip+' tệp đã có)':''):'Đã có đủ hải đồ'); refreshCharts(); };
 function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
 function zoomChart(id){ const c=charts.find(c=>c.id===id); if(c&&c.bounds){ closePanel(); fitBounds(c.bounds); if(S.zoom<c.minzoom) S.zoom=c.minzoom; redraw(); } }
 function delChart(id){ confirmBox('Xoá hải đồ này khỏi app?',()=>{ if(NA) NA.deleteChart(id); delete set.charts[id]; saveSet(); for(const [k,v] of [...tiles]) if(k.startsWith('m_'+id+'/')){ if(v.img&&v.img.close) v.img.close(); tiles.delete(k); } refreshCharts(); showLayers(); }); }
