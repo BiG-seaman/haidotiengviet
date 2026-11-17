@@ -903,6 +903,12 @@ public class MainActivity extends Activity implements LocationListener {
             return a.toString();
         }
 
+        // ID máy cho bản quyền: ANDROID_ID cố định theo máy + khoá ký app (cài lại app vẫn giữ nguyên)
+        @JavascriptInterface public String deviceId() {
+            String a = android.provider.Settings.Secure.getString(getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+            return (a == null ? "" : a) + "|" + android.os.Build.MANUFACTURER + "|" + android.os.Build.MODEL;
+        }
+
         @JavascriptInterface public void pickMbtiles() { ui.post(() -> pick(REQ_MBT)); }
 
         @JavascriptInterface public void deleteChart(String id) {
