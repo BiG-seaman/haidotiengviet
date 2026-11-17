@@ -34,3 +34,13 @@ jobs:
         run: |
           $env:HAIDOVN_HOME = "$env:RUNNER_TEMP\hdtest"
           $p = Start-Process -FilePath dist\HaiDoVN\HaiDoVN.exe -ArgumentList '--selftest' -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\hdtest\selftest.txt"
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Them huong dan
+        shell: bash
+        run: cp pc/HUONG_DAN.txt dist/HaiDoVN/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HaiDoVN-Windows
+          path: dist/HaiDoVN
+          retention-days: 30
