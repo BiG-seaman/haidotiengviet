@@ -14,13 +14,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build
+      - name: Lay hai do nen mac dinh tu Releases (neu co)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          for z in *.zip; do [ -f "$z" ] && unzip -oq "$z"; done
-          DIR=$(dirname "$(find . -name settings.gradle -not -path './.git/*' | head -1)")
-          echo "Thu muc du an: $DIR"
-          cd "$DIR" && gradle assembleDebug --no-daemon
+          mkdir -p /tmp/basemap
+          gh release download basemap --repo "${{ github.repository }}" --pattern "*.mbtiles" --dir /tmp/basemap || echo "Chua co hai do nen mac dinh trong Releases (tag basemap)"
+          f=$(ls /tmp/basemap/*.mbtiles 2>/dev/null | head -1)
+          if [ -n "$f" ]; then cp "$f" app/src/main/assets/default.mbtiles; ls -la app/src/main/assets; fi
+      - name: Build
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: HaiDoMo-apk
-          path: '**/build/outputs/apk/debug/*.apk'
+          path: app/build/outputs/apk/debug/*.apk
+          compression-level: 0
