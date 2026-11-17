@@ -44,6 +44,11 @@ label.sw input{width:22px;height:22px}
 #modal{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:20}
 #modal .box{background:#0f2a3d;border-radius:14px;padding:16px;width:86%;max-width:360px}
 #modal .acts{display:flex;gap:10px;justify-content:flex-end}
+#lock{position:absolute;inset:0;background:#0b1f2e;z-index:25;display:flex;align-items:center;justify-content:center;overflow:auto;padding:16px}
+#lock .card{max-width:440px;width:100%;background:#12324a;border-radius:16px;padding:20px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+#lock h2{margin:0 0 8px;font-size:20px}#lock .id{font-family:ui-monospace,monospace;font-size:22px;letter-spacing:1px;background:#0a1a27;border-radius:10px;padding:10px;text-align:center;margin:6px 0}
+#lock input{width:100%;box-sizing:border-box;font-size:17px;padding:12px;border-radius:10px;border:1px solid #2f5672;background:#0a1a27;color:#fff;text-transform:uppercase}
+#lock .msg{min-height:20px;color:#ffd54a;margin:8px 0}
 #toast{position:absolute;left:50%;transform:translateX(-50%);bottom:110px;background:rgba(0,0,0,.85);padding:9px 16px;border-radius:20px;display:none;z-index:30;max-width:86%;text-align:center}
 table.w{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
 table.w td,table.w th{padding:6px 4px;border-bottom:1px solid #1d3d52;text-align:right}
@@ -105,6 +110,7 @@ table.w td:first-child,table.w th:first-child{text-align:left}
 <div id="popup"></div>
 <div id="panel"></div>
 <div id="modal"></div>
+<div id="lock"><div class="card"><h2>🔑 Hải đồ VN</h2><p id="lockmsg">Đang kiểm tra bản quyền…</p></div></div>
 <div id="toast"></div>
 <script>
 'use strict';
@@ -126,7 +132,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name', planKn:6,
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.13';
+const APP_VER='1.14';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -923,15 +929,109 @@ function showMenu(){ openPanel('Chức năng',`<div class="grid">
   <button class="b" onclick="showTracks()">👣 Vết đi${rec?' (đang ghi)':''}</button><button class="b" onclick="startMode('measure')">📏 Đo khoảng cách</button>
   <button class="b" onclick="showAlarms()">⚠ Báo động${Object.keys(alm).length?' (!)':''}</button><button class="b" onclick="showWeather()">🌬 Thời tiết biển</button>
   <button class="b" onclick="showAis()">📡 AIS</button><button class="b" onclick="showLayers()">▤ Hải đồ</button>
-  <button class="b" onclick="showGpx()">⇅ Nhập / Xuất GPX</button><button class="b" onclick="showInfo()">ℹ Thông tin</button></div>
+  <button class="b" onclick="showGpx()">⇅ Nhập / Xuất GPX</button><button class="b" onclick="showLicense()">🔑 Bản quyền${licSt.ok&&licSt.exp-licNow()<7*86400000?' (!)':''}</button>
+  <button class="b" onclick="showInfo()">ℹ Thông tin</button></div>
   <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem dự báo tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
 function showGpx(){ openPanel('Nhập / Xuất GPX',`<div class="grid"><button class="b p" onclick="NA?NA.importGpx():toast('Chỉ dùng được trong app Android')">⬇ Nhập tệp GPX</button><button class="b p" onclick="exportGpx()">⬆ Xuất tệp GPX</button></div>
   <p class="note"><b>Nhập:</b> thêm điểm, tuyến, vết từ tệp .gpx (từ máy định vị, Navionics, OpenCPN…) vào app, không xoá dữ liệu đang có.<br><b>Xuất:</b> lưu toàn bộ ${wpts.length} điểm, ${routes.length} tuyến, ${tracks.length} vết ra một tệp .gpx để sao lưu hoặc chuyển sang máy khác.</p>`); }
 function showInfo(){ openPanel('Thông tin',`<div class="info"><p style="font-size:18px"><b>Hải đồ VN</b> · phiên bản ${APP_VER}${PC?' · Windows':''}</p>
   <p>Phần mềm tạo bởi <b>Mr Công</b><br>📞 <b>0586 568 569</b></p>
+  <p onclick="showLicense()" style="cursor:pointer">🔑 Bản quyền: <b>${licSt.ok?(licSt.type==='paid'?'Đã kích hoạt':'Dùng thử')+' – còn '+fmtLeft(licSt.exp-licNow()):'chưa kích hoạt'}</b> ›</p>
   <p>Chuyên cung cấp:<br>• Phần mềm hàng hải<br>• Máy tính bảng, iPad đi biển<br>• AIS Pilot Plug Wi‑Fi và thiết bị AIS<br>• Lắp đặt, hướng dẫn sử dụng…</p>
   <div class="grid"><button class="b p" onclick="openUrl('tel:0586568569')">📞 Gọi điện</button><button class="b p" onclick="openUrl('https://zalo.me/0586568569')">💬 Nhắn Zalo</button></div>
   <p class="note">Dữ liệu bản đồ: © OpenStreetMap, OpenSeaMap. Thời tiết: PassageWeather.com, Open-Meteo.<br>Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức, thiết bị hàng hải và việc quan sát của người đi biển.</p></div>`); }
+
+
+/* ================= Bản quyền =================
+   Giấy phép = mã ký số (ECDSA P-256) gắn với ID máy, có hạn dùng. App chỉ có khoá CÔNG KHAI để kiểm tra,
+   không tự tạo được mã. Máy chủ (Cloudflare) cấp: dùng thử 7 ngày tính từ lần đầu máy liên hệ (cài lại
+   app không reset), hoặc đổi mã kích hoạt HD-XXXX-XXXX-XX lấy giấy phép. Có giấy phép rồi thì chạy được
+   khi không có mạng, tự đếm ngược; hết hạn thì che hải đồ và yêu cầu mã. */
+const LIC_URL='https://haido-license.cong0586568569.workers.dev';
+const LIC_PUB={"kty":"EC","crv":"P-256","x":"JHFE7eoHin_Bs2NC9g8Cff7vLRmfD3Kp8GwZWT1KqAs","y":"f6HYQldnPEGZiTlbKD3XzrPPLIv-uyRnw-ahC28hDOY"};
+const LIC_EPOCH=Date.UTC(2025,0,1), B32A='0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+let lic=store.load('lic')||{};            // {code, seen}
+let licSt={ok:false,type:null,exp:0,id:null,ready:false};
+function b32e(b){ let bits=0,v=0,o=''; for(const x of b){ v=(v<<8)|x; bits+=8; while(bits>=5){ o+=B32A[(v>>>(bits-5))&31]; bits-=5; } } if(bits>0) o+=B32A[(v<<(5-bits))&31]; return o; }
+function b32d(s){ let bits=0,v=0; const o=[]; for(const c of s){ const i=B32A.indexOf(c); if(i<0) return null; v=((v<<5)|i)&0xffffff; bits+=5; if(bits>=8){ o.push((v>>>(bits-8))&255); bits-=8; } } return new Uint8Array(o); }
+const cleanCode=s=>String(s||'').toUpperCase().replace(/O/g,'0').replace(/[IL]/g,'1').replace(/[^0-9A-Z]/g,'');
+const fmtId=id=>id?id.slice(0,4)+'-'+id.slice(4,8)+'-'+id.slice(8):'…';
+function fmtLeft(ms){ if(!(ms>0)) return 'hết hạn'; const d=Math.floor(ms/86400000), h=Math.floor(ms%86400000/3600000), m=Math.floor(ms%3600000/60000);
+  return d>0?d+' ngày '+h+' giờ':h>0?h+' giờ '+m+' phút':m+' phút'; }
+const fmtDate=t=>{ const d=new Date(t), p=x=>String(x).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes())+' ngày '+p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear(); };
+function licNow(){ return Math.max(Date.now(), lic.seen||0); }   // vặn lùi đồng hồ máy không kéo dài được hạn
+async function machineId(){ let raw=null;
+  try{ raw=NA&&NA.deviceId?NA.deviceId():null; }catch(e){}
+  if(!raw){ try{ raw=localStorage.getItem('hd_rid'); if(!raw){ raw=uid()+uid()+uid(); localStorage.setItem('hd_rid',raw); } }catch(e){ raw='x'; } }
+  const h=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode('HDVN-ID|'+raw)));
+  return (PC?'W':'A')+b32e(h).slice(0,11); }
+let licKey=null;
+async function licVerify(code,id){ const c=cleanCode(code); if(c.length<110||!LIC_PUB) return null; const b=b32d(c); if(!b||b.length<70||b[0]!==1) return null;
+  try{ licKey=licKey||await crypto.subtle.importKey('jwk',LIC_PUB,{name:'ECDSA',namedCurve:'P-256'},false,['verify']);
+    const p=b.slice(0,6), msg=new Uint8Array([...p,...new TextEncoder().encode('HDVN|'+id)]);
+    if(!await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},licKey,b.slice(6,70),msg)) return null;
+    return {type:p[1]===2?'paid':'trial', exp:LIC_EPOCH+(((p[2]<<24)|(p[3]<<16)|(p[4]<<8)|p[5])>>>0)*60000, code:c}; }catch(e){ return null; } }
+async function licApply(code,src){ const v=await licVerify(code,licSt.id); if(!v) return false;
+  const cur=lic.code?await licVerify(lic.code,licSt.id):null;
+  if(!cur||v.exp>cur.exp||(v.type==='paid'&&cur.type!=='paid'&&v.exp>=licNow())){ lic.code=v.code; store.save('lic',lic); }
+  return true; }
+async function licEval(){ const v=lic.code?await licVerify(lic.code,licSt.id):null, now=licNow();
+  licSt.type=v?v.type:null; licSt.exp=v?v.exp:0; licSt.ok=!!v&&v.exp>now; licSt.ready=true;
+  if(licSt.ok) $('lock').style.display='none'; else showLock(); }
+async function licPost(path,body){ const r=await fetch(LIC_URL+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({error:'Máy chủ trả lời lỗi'})); if(j.now){ lic.seen=j.now; store.save('lic',lic); } return j; }   // j.now: giờ chuẩn từ máy chủ
+let licSyncT=0;
+async function licSync(manual){ if(!licSt.id||!LIC_URL.startsWith('http')) return; licSyncT=Date.now();
+  try{ const had=licSt.ok, j=await licPost('/trial',{id:licSt.id,plat:PC?'windows':'android',ver:APP_VER});
+    if(j.error){ if(manual) lockMsg(j.error); return; }
+    const was=licSt.type; await licApply(j.code); await licEval();
+    if(!had&&licSt.ok&&j.type==='trial'&&!was) toast('Bắt đầu dùng thử 7 ngày – còn '+fmtLeft(licSt.exp-licNow()));
+    if(manual&&!licSt.ok) lockMsg(j.type==='trial'?'Máy này đã hết thời gian dùng thử. Vui lòng nhập mã bản quyền.':'');
+  }catch(e){ if(manual) lockMsg('Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.'); } }
+async function licEnter(input){ const c=cleanCode(input); const say=m=>{ lockMsg(m); const e=$('licmsg2'); if(e) e.textContent=m; };
+  if(!c) return say('Hãy nhập mã.');
+  if(c.length===12&&c.startsWith('HD')){ say('Đang kích hoạt…');
+    try{ const j=await licPost('/redeem',{id:licSt.id,key:c}); if(j.error) return say(j.error);
+      if(!await licApply(j.code)) return say('Mã nhận về không hợp lệ.'); await licEval(); closePanel();
+      toast('Đã kích hoạt bản quyền – hạn dùng đến '+fmtDate(licSt.exp)); }catch(e){ say('Cần kết nối mạng để kích hoạt mã HD-… (hoặc dùng mã dài).'); } return; }
+  if(c.length>=110){ const v=await licVerify(c,licSt.id); if(!v) return say('Mã không đúng hoặc không phải của máy này.');
+    if(v.exp<=licNow()) return say('Mã này đã hết hạn.'); await licApply(c); await licEval(); closePanel(); toast('Đã kích hoạt – hạn dùng đến '+fmtDate(licSt.exp)); return; }
+  say('Mã không đúng định dạng (dạng HD-XXXX-XXXX-XX).'); }
+function lockMsg(m){ const e=$('lmsg'); if(e) e.textContent=m||''; }
+function contactBtns(){ return `<div class="grid" style="margin-top:10px"><button class="b" onclick="openUrl('tel:0586568569')">📞 Gọi Mr Công</button><button class="b" onclick="openUrl('https://zalo.me/0586568569')">💬 Zalo 0586 568 569</button></div>`; }
+function copyId(){ const t='ID máy Hải đồ VN: '+fmtId(licSt.id); try{ navigator.clipboard.writeText(t).then(()=>toast('Đã chép ID máy'),()=>toast(t)); }catch(e){ toast(t); } }
+function showLock(){ const L=$('lock'); if(L.style.display==='flex'&&$('lcode')) return;
+  closePanel(); hidePopup&&hidePopup();
+  const why=licSt.type==='trial'?'Đã hết thời gian dùng thử 7 ngày.':licSt.type==='paid'?'Bản quyền đã hết hạn ngày '+fmtDate(licSt.exp)+'.':'Phần mềm chưa được kích hoạt.';
+  L.innerHTML=`<div class="card"><h2>🔑 Hải đồ VN – cần mã bản quyền</h2><p>${why} Hải đồ tạm khoá cho tới khi nhập mã.</p>
+    <p style="margin:10px 0 2px">ID máy của bạn (gửi cho Mr Công để mua mã):</p><div class="id">${fmtId(licSt.id)}</div>
+    <div class="grid"><button class="b" onclick="copyId()">📋 Chép ID máy</button>${licSt.type?'':'<button class="b" onclick="licSync(true)">↻ Dùng thử 7 ngày</button>'}</div>
+    <p style="margin:14px 0 6px">Nhập mã kích hoạt:</p><input id="lcode" placeholder="HD-XXXX-XXXX-XX" autocomplete="off" autocapitalize="characters" spellcheck="false" onkeydown="if(event.key==='Enter')licEnter(this.value)">
+    <div class="msg" id="lmsg">${licSt.type?'':'Lần đầu sử dụng cần có mạng để nhận 7 ngày dùng thử.'}</div>
+    <div class="grid"><button class="b p" onclick="licEnter($('lcode').value)">✔ Kích hoạt</button></div>${contactBtns()}
+    <p class="note" style="margin-top:12px">Mã bản quyền dùng 365 ngày, gắn với máy này. Sau khi kích hoạt dùng được cả khi không có mạng.</p></div>`;
+  L.style.display='flex'; }
+function showLicense(){ const left=licSt.exp-licNow();
+  openPanel('Bản quyền',`<div class="info"><p style="font-size:18px">${licSt.ok?(licSt.type==='paid'?'✅ Đã kích hoạt bản quyền':'⏳ Đang dùng thử'):'⛔ Chưa có bản quyền'}</p>
+   ${licSt.ok?`<p>Còn lại: <b style="font-size:22px;color:#ffd54a">${fmtLeft(left)}</b><br>Hết hạn lúc: <b>${fmtDate(licSt.exp)}</b></p>`:''}
+   <p>ID máy: <b style="font-family:ui-monospace,monospace;font-size:18px">${fmtId(licSt.id)}</b> <button class="b" style="padding:4px 10px" onclick="copyId()">Chép</button></p>
+   <p style="margin-bottom:6px">${licSt.type==='paid'?'Gia hạn – nhập mã mới (thời gian được cộng nối tiếp):':'Nhập mã kích hoạt:'}</p>
+   <input id="lcode2" placeholder="HD-XXXX-XXXX-XX" style="width:100%;box-sizing:border-box;text-transform:uppercase;font-size:17px;padding:12px;border-radius:10px;border:1px solid #2f5672;background:#0a1a27;color:#fff" autocomplete="off" onkeydown="if(event.key==='Enter')licEnter(this.value)">
+   <div id="licmsg2" style="color:#ffd54a;min-height:20px;margin:6px 0"></div>
+   <div class="grid"><button class="b p" onclick="licEnter($('lcode2').value)">✔ Kích hoạt</button><button class="b" onclick="licSync(true).then(()=>showLicense())">↻ Đồng bộ</button></div>${contactBtns()}</div>`); }
+async function licInit(){ try{ licSt.id=await machineId(); }catch(e){ licSt.id='A00000000000'; }
+  await licEval();
+  if(!licSt.ok||Date.now()-(lic.syncT||0)>6*3600000) licSync(false).then(()=>{ lic.syncT=Date.now(); store.save('lic',lic); });
+  licWarn(); }
+let licWarnT=0;
+function licWarn(){ if(!licSt.ok) return; const left=licSt.exp-licNow();
+  if(left<7*86400000&&Date.now()-licWarnT>3*3600000){ licWarnT=Date.now();
+    toast((licSt.type==='trial'?'Dùng thử':'Bản quyền')+' còn '+fmtLeft(left)+' – liên hệ Mr Công 0586 568 569 để '+(licSt.type==='trial'?'mua mã':'gia hạn')); } }
+setInterval(()=>{ if(!licSt.ready) return; if(licSt.ok&&licSt.exp<=licNow()) licEval(); else licWarn();
+  if(Date.now()>(lic.seen||0)){ lic.seen=Date.now(); if(Date.now()-(lic.savedT||0)>600000){ lic.savedT=Date.now(); store.save('lic',lic); } }
+  if(Date.now()-licSyncT>6*3600000) licSync(false); },30000);
+window.addEventListener('online',()=>{ if(!licSt.ok) licSync(false); });
+licInit();
 
 /* ================= Khởi động ================= */
 applyNight(); updFollow(); refreshCharts(); resize(); updTideBox(); setTimeout(()=>autoTide(),1500);
@@ -946,6 +1046,7 @@ async function fetchNotices(){ if(navigator.onLine===false) return;
     const lines=(await r.text()).split(/\r?\n/).map(l=>l.trim()).filter(l=>/^@thongbao\s*:/i.test(l)).map(l=>l.replace(/^@thongbao\s*:\s*/i,'')).filter(Boolean).slice(0,20);
     notices=lines; noticeFetchT=Date.now(); store.save('notices',{lines,t:noticeFetchT}); if(!lines.length) hideNotice(); }catch(e){} }
 function showNotice(){ if(!notices.length) return;
+  if(licSt.ok&&licSt.type==='paid'){ hideNotice(); return; }                  // máy đã mua bản quyền: không hiện quảng cáo
   if(Object.keys(alm).length||$('modal').style.display==='flex') return;      // không che báo động / hộp thoại
   const t=notices[noticeIdx%notices.length]; noticeIdx++;
   $('ntext').textContent='📢 '+t; const n=$('notice');
