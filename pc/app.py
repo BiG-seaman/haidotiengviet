@@ -9,7 +9,7 @@ Dùng chung giao diện (web/index.html) với app Android. Phần này thay cho
 - hộp thoại chọn/lưu tệp của Windows.
 Cửa sổ dùng Microsoft Edge WebView2 (qua pywebview). Nếu không có, mở bằng Edge/trình duyệt.
 """
-import hashlib, http.server, io, json, os, queue, re, socket, socketserver, sqlite3, sys, threading, time
+import hashlib, math, http.server, io, json, os, queue, re, socket, socketserver, sqlite3, sys, threading, time
 import urllib.parse, urllib.request, webbrowser
 
 APP_NAME = "Hải đồ VN"
@@ -53,18 +53,31 @@ def log(*a):
 class Events:
     def __init__(self):
         self.clients = []
+        self.pending = []        # sự kiện chờ giao diện kết nối (vd lúc mới mở)
         self.lock = threading.Lock()
 
     def add(self):
         q = queue.Queue(maxsize=2000)
         with self.lock:
             self.clients.append(q)
+            for m in self.pending:
+                q.put_nowait(m)
+            self.pending = []
         return q
 
     def remove(self, q):
         with self.lock:
             if q in self.clients:
                 self.clients.remove(q)
+
+    def pend(self, fn, *args):
+        """Gửi ngay nếu giao diện đã mở, nếu chưa thì giữ lại tới khi giao diện kết nối."""
+        msg = json.dumps({"fn": fn, "args": list(args)}, ensure_ascii=False)
+        with self.lock:
+            if not self.clients:
+                self.pending.append(msg)
+                return
+        self.send(fn, *args)
 
     def send(self, fn, *args):
         msg = json.dumps({"fn": fn, "args": list(args)}, ensure_ascii=False)
@@ -179,6 +192,18 @@ class Charts:
                     info["bounds"] = b
             except Exception:
                 pass
+            if "bounds" not in info:          # tệp không ghi vùng phủ: tính từ các ô ở mức zoom nhỏ nhất
+                try:
+                    z = int(minz); n = 1 << z
+                    r = db.execute(f"SELECT MIN(tile_column), MAX(tile_column), MIN(tile_row), MAX(tile_row) FROM tiles WHERE zoom_level={z}").fetchone()
+                    if r and r[0] is not None:
+                        x0, x1, r0, r1 = r
+                        y0, y1 = n - 1 - r1, n - 1 - r0
+                        lon = lambda x: x / n * 360 - 180
+                        lat = lambda y: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+                        info["bounds"] = [lon(x0), lat(y1 + 1), lon(x1 + 1), lat(y0)]
+                except Exception as e:
+                    log("bounds", e)
         except Exception as e:
             log("open chart failed", path, e)
             return None
@@ -663,10 +688,23 @@ def install_default_chart():
     """Hải đồ nền mặc định đóng gói sẵn (basemap/default.mbtiles): bật một lần sau khi cài, dùng tại chỗ."""
     flag = os.path.join(ROOT, "default_chart_installed")
     src = os.path.join(BASE, "basemap", "default.mbtiles")
-    if os.path.exists(flag) or not os.path.exists(src):
+    shown = os.path.join(ROOT, "default_chart_shown")
+    if os.path.exists(flag):
+        # máy đã cài bằng bản trước (chưa tự di chuyển tới hải đồ nền): làm việc đó một lần
+        if not os.path.exists(shown) and "Hải đồ nền" in CHARTS.items:
+            EV.pend("onChartsChanged", "Hải đồ nền")
+            open(shown, "w").close()
         return
-    if CHARTS.open(src, "Hải đồ nền"):
+    if not os.path.exists(src):
+        log("khong co hai do nen trong goi cai", src)
+        return
+    cid = CHARTS.open(src, "Hải đồ nền")
+    log("cai hai do nen", src, "->", cid)
+    if cid:
         open(flag, "w").close()
+        open(shown, "w").close()
+        EV.pend("onChartsChanged", cid)       # giao diện mở lên sẽ tự di chuyển tới vùng hải đồ nền
+        EV.pend("onToast", "Đã cài hải đồ nền mặc định")
 
 
 def main():
