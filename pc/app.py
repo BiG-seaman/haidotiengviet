@@ -659,9 +659,20 @@ def selftest(url):
     return code
 
 
+def install_default_chart():
+    """Hải đồ nền mặc định đóng gói sẵn (basemap/default.mbtiles): bật một lần sau khi cài, dùng tại chỗ."""
+    flag = os.path.join(ROOT, "default_chart_installed")
+    src = os.path.join(BASE, "basemap", "default.mbtiles")
+    if os.path.exists(flag) or not os.path.exists(src):
+        return
+    if CHARTS.open(src, "Hải đồ nền"):
+        open(flag, "w").close()
+
+
 def main():
     global CHARTS, WINDOW
     CHARTS = Charts()
+    install_default_chart()
     url = start_servers()
     log("start", url)
     if "--selftest" in sys.argv:
