@@ -650,6 +650,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if p == "/api/load":
                 f = key_file(q.get("k", ""))
                 return self.send(200, open(f, "rb").read()) if os.path.exists(f) else self.send(204)
+            if p == "/api/deviceid":
+                return self.send(200, device_id().encode("utf-8"), "text/plain; charset=utf-8")
             if p == "/api/charts":
                 return self.send(200, json.dumps(CHARTS.list(), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
             if p == "/api/serial_ports":
@@ -739,6 +741,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send(500, str(e).encode("utf-8"))
             except Exception:
                 pass
+
+
+def device_id():
+    """ID máy Windows cho bản quyền: MachineGuid (giữ nguyên khi cài lại phần mềm)."""
+    try:
+        import winreg
+        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
+                           winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0))
+        v, _ = winreg.QueryValueEx(k, "MachineGuid")
+        if v:
+            return "win|" + str(v)
+    except Exception:
+        pass
+    f = os.path.join(ROOT, "machine.id")
+    try:
+        return "file|" + open(f, encoding="utf-8").read().strip()
+    except Exception:
+        import uuid
+        v = uuid.uuid4().hex
+        try:
+            atomic_write(f, v.encode("utf-8"))
+        except Exception:
+            pass
+        return "file|" + v
 
 
 def pick_mbtiles():
