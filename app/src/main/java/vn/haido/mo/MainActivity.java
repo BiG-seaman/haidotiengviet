@@ -770,7 +770,7 @@ public class MainActivity extends Activity implements LocationListener {
                 String name = f.getString("name").replaceAll("[^\\p{L}\\p{N}._ &()-]", "_");
                 if (!name.matches("(?i).*\\.(mbtiles|kap|sqlitedb)$")) continue;
                 File out = new File(chartDir(), name);
-                if (out.exists() && fid.equals(driveMeta().optString(name))) { skip++; continue; }
+                if (f.optInt("force", 0) == 0 && out.exists() && fid.equals(driveMeta().optString(name))) { skip++; continue; }
                 long need = f.optLong("size", -1);
                 if (need > 0) {
                     File part = new File(out.getPath() + ".part");
