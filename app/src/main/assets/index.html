@@ -134,7 +134,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name', planKn:6,
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.16';
+const APP_VER='1.17';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -711,6 +711,7 @@ function showLayers(){ let h=`<label class="sw"><input type="checkbox" ${set.osm
   <p class="note">Máy: ${HW.cores} nhân CPU, ~${HW.mem} GB RAM → tải ${P.maxc} ô cùng lúc, giữ sẵn ${P.maxt} ô (~${Math.round(P.maxt/4)} MB)${P.out?', tải trước '+P.out+' mức thu nhỏ':''}. Mức Tối đa làm máy ấm và tốn pin hơn.</p>
   <h3 style="margin:14px 0 4px">☁ Tải hải đồ từ kho</h3><div class="grid" id="drvcats">${drvCatsHtml()}</div>
   <p class="note">Bấm một mục để tải về toàn bộ hải đồ của mục đó (nên dùng Wi‑Fi). Tệp đã có sẽ được bỏ qua; mất sóng giữa chừng thì bấm lại để tải tiếp.</p>
+  ${PC?`<div class="grid"><button class="b" onclick="splitAsk()">✂ Chia nhỏ tệp hải đồ lớn</button></div><p class="note">Dành cho người quản lý kho: cắt tệp MBTiles lớn thành nhiều tệp nhỏ theo vùng (mỗi tệp đủ mọi mức zoom), rồi chép lên Google Drive để khách chọn tải từng vùng.</p>`:''}
   <h3 style="margin:14px 0 4px">Hải đồ của bạn</h3>`;
   const oc=orderedCharts().reverse();   // hiển thị lớp trên cùng trước
   h+=oc.length?oc.map((c,i)=>`<div class="row"><input type="checkbox" style="width:22px;height:22px" ${set.charts[c.id]!==false?'checked':''} onchange="set.charts['${esc(c.id)}']=this.checked;saveSet();redraw()"><div class="g" onclick="zoomChart('${esc(c.id)}')"><b>${esc(c.name)}</b><small>${c.format==='pbf'?'⚠ Dạng vector – chưa hỗ trợ':'Zoom '+c.minzoom+'–'+c.maxzoom} · ${(c.size/1048576).toFixed(1)} MB</small></div>`+
@@ -733,21 +734,30 @@ async function drvOpen(key){ if(drvBusy) return toast('Đang tải hải đồ�
   if(j.error) return toast(j.error); const files=j.files||[]; if(!files.length) return toast(c.name+': chưa có tệp nào.');
   let have={}; try{ have=JSON.parse(NA.driveState()||'{}'); }catch(e){}
   const safe=n=>n.replace(PC?/[\\/:*?"<>|]/g:/[^\p{L}\p{N}._ &()-]/gu,'_');
-  const todo=files.filter(f=>have[safe(f.name)]!==f.id), list=todo.length?todo:files;
-  const known=list.filter(f=>f.size>0), unknown=list.length-known.length, need=known.reduce((t,f)=>t+f.size,0);
   let free=-1; try{ free=NA.freeSpace?+NA.freeSpace():-1; }catch(e){}
-  const MARGIN=100*1048576, short=free>=0&&need+MARGIN>free;
-  const sz=x=>x>=1073741824?(x/1073741824).toFixed(2)+' GB':x>0?mb(x)+' MB':'?';
-  $('toast').style.display='none'; modalCb=short?null:()=>drvStart(list, c.name);
-  $('modal').innerHTML=`<div class="box"><p><b>${esc(j.name||c.name)}</b>: ${files.length} tệp hải đồ${todo.length<files.length?`, đã có ${files.length-todo.length}`:''}.</p>
-    <div style="max-height:36vh;overflow:auto;margin:6px 0 8px;font-size:14px">${files.map(f=>`<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #1d3a50"><span style="flex:1">${have[safe(f.name)]===f.id?'✅':'⬇'} ${esc((f.dir?f.dir+' / ':'')+f.name)}</span><span style="white-space:nowrap;color:#9fc4dc">${sz(f.size)}</span></div>`).join('')}</div>
-    <div style="font-size:15px;line-height:1.6">${todo.length?'Cần tải':'Tải lại'}: <b>${list.length} tệp – ${sz(need)}</b>${unknown?` <span class="note">(+${unknown} tệp chưa rõ dung lượng)</span>`:''}<br>
-    Bộ nhớ ${PC?'ổ đĩa':'máy'} còn trống: <b style="color:${short?'#ff8a80':'#7ee787'}">${free>=0?sz(free):'không rõ'}</b>${free>=0&&!short?` → sau khi tải còn ~${sz(free-need)}`:''}</div>
-    ${short?`<p style="color:#ff8a80;margin:10px 0 0"><b>⚠ Không đủ bộ nhớ.</b> Cần thêm khoảng <b>${sz(need+MARGIN-free)}</b>. Hãy xoá bớt ảnh, video, ứng dụng không dùng hoặc hải đồ cũ (mục Hải đồ của bạn ▸ Xoá) rồi bấm tải lại.</p>`
-      :`<p class="note">${todo.length?'Tệp hải đồ thường nặng, nên dùng Wi‑Fi.':'Đã có đủ. Bấm Tải lại nếu muốn tải lại tất cả.'}</p>`}
-    <div class="acts"><button class="b" onclick="closeModal()">${short?'Đóng':'Huỷ'}</button>${short?'':`<button class="b p" onclick="okModal()">${todo.length?'⬇ Tải '+todo.length+' tệp':'Tải lại'}</button>`}</div></div>`;
-  $('modal').style.display='flex'; }
-function drvStart(list,name){ drvBusy=true; closePanel(); NA.driveDownload(JSON.stringify(list.map(f=>({id:f.id,name:f.name,size:f.size||-1})))); drvBox('Bắt đầu tải '+name+'…'); }
+  drvSel={files,have:f=>have[safe(f.name)]===f.id,free,name:j.name||c.name,pick:new Set()};
+  $('toast').style.display='none'; drvRender(); $('modal').style.display='flex'; }
+let drvSel=null;
+const drvSz=x=>x>=1073741824?(x/1073741824).toFixed(2)+' GB':x>0?mb(x)+' MB':'?';
+function drvRender(){ const D=drvSel, files=D.files, MARGIN=100*1048576;
+  const picked=files.filter((f,i)=>D.pick.has(i)), need=picked.reduce((t,f)=>t+(f.size>0?f.size:0),0), unknown=picked.filter(f=>!(f.size>0)).length;
+  const short=D.free>=0&&picked.length&&need+MARGIN>D.free, nHave=files.filter(D.have).length;
+  modalCb=null;
+  $('modal').innerHTML=`<div class="box"><p><b>${esc(D.name)}</b>: ${files.length} tệp${nHave?`, đã có ${nHave}`:''}. Chạm để chọn tệp muốn tải.</p>
+    <div style="display:flex;gap:8px;margin:4px 0"><button class="b" style="padding:6px 10px" onclick="drvPickAll(1)">Chọn tệp chưa có</button><button class="b" style="padding:6px 10px" onclick="drvPickAll(0)">Bỏ chọn</button></div>
+    <div style="max-height:38vh;overflow:auto;margin:6px 0 8px;font-size:14px">${files.map((f,i)=>`<label style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #1d3a50;cursor:pointer">
+      <input type="checkbox" style="width:20px;height:20px" ${D.pick.has(i)?'checked':''} onchange="drvPick(${i},this.checked)">
+      <span style="flex:1">${D.have(f)?'✅ ':''}${esc((f.dir?f.dir+' / ':'')+f.name)}</span><span style="white-space:nowrap;color:#9fc4dc">${drvSz(f.size)}</span></label>`).join('')}</div>
+    <div style="font-size:15px;line-height:1.6">Đã chọn: <b>${picked.length} tệp – ${drvSz(need)}</b>${unknown?` <span class="note">(+${unknown} tệp chưa rõ dung lượng)</span>`:''}<br>
+    Bộ nhớ ${PC?'ổ đĩa':'máy'} còn trống: <b style="color:${short?'#ff8a80':'#7ee787'}">${D.free>=0?drvSz(D.free):'không rõ'}</b>${D.free>=0&&picked.length&&!short?` → sau khi tải còn ~${drvSz(D.free-need)}`:''}</div>
+    ${short?`<p style="color:#ff8a80;margin:10px 0 0"><b>⚠ Không đủ bộ nhớ.</b> Cần thêm khoảng <b>${drvSz(need+MARGIN-D.free)}</b>. Bỏ bớt tệp, hoặc xoá bớt ảnh, video, ứng dụng không dùng, hải đồ cũ (mục Hải đồ của bạn ▸ Xoá).</p>`
+      :`<p class="note">${nHave?'✅ = đã có trên máy (chọn lại sẽ tải lại). ':''}Tệp hải đồ thường nặng, nên dùng Wi‑Fi.</p>`}
+    <div class="acts"><button class="b" onclick="closeModal()">Đóng</button>${picked.length&&!short?`<button class="b p" onclick="drvGo()">⬇ Tải ${picked.length} tệp</button>`:''}</div></div>`; }
+function drvPick(i,on){ if(on) drvSel.pick.add(i); else drvSel.pick.delete(i); const sc=document.querySelector('#modal .box div[style*="overflow"]'), st=sc?sc.scrollTop:0; drvRender(); const s2=document.querySelector('#modal .box div[style*="overflow"]'); if(s2) s2.scrollTop=st; }
+function drvPickAll(on){ drvSel.pick=new Set(on?drvSel.files.map((f,i)=>drvSel.have(f)?-1:i).filter(i=>i>=0):[]); drvRender(); }
+function drvGo(){ const D=drvSel, list=D.files.filter((f,i)=>D.pick.has(i)); closeModal();
+  drvStart(list.map(f=>D.have(f)?{...f,force:1}:f), D.name); }
+function drvStart(list,name){ drvBusy=true; closePanel(); NA.driveDownload(JSON.stringify(list.map(f=>({id:f.id,name:f.name,size:f.size||-1,force:f.force?1:0})))); drvBox('Bắt đầu tải '+name+'…'); }
 function drvBox(html){ const b=$('dlbox'); if(!html){ b.style.display='none'; return; } b.innerHTML=`<div style="flex:1">${html}</div><button class="b r" style="padding:6px 10px" onclick="drvCancel()">Dừng</button>`; b.style.display='flex'; }
 function drvCancel(){ if(NA&&NA.driveCancel) NA.driveCancel(); }
 const mb=x=>(x/1048576).toFixed(x<1048576*10?1:0);
@@ -755,6 +765,15 @@ window.onDriveProgress=function(i,n,name,done,size){ drvBusy=true; const pct=siz
   drvBox(`⬇ <b>${n>1?'('+i+'/'+n+') ':''}${esc(name)}</b><br>${pct!=null?pct+'% · ':''}${mb(done)}${size>0?' / '+mb(size):''} MB<div style="height:5px;background:#24465c;border-radius:3px;margin-top:5px"><div style="height:5px;width:${pct||0}%;background:#4fc3f7;border-radius:3px"></div></div>`); };
 window.onDriveDone=function(ok,skip,fail,err){ drvBusy=false; drvBox(null);
   if(fail||err) toast((ok?'Đã tải '+ok+' tệp. ':'')+(err||'Có '+fail+' tệp lỗi')); else toast(ok?'Đã tải xong '+ok+' hải đồ'+(skip?' (bỏ qua '+skip+' tệp đã có)':''):'Đã có đủ hải đồ'); refreshCharts(); };
+function splitAsk(){ modalCb=null;
+  $('modal').innerHTML=`<div class="box"><p><b>✂ Chia nhỏ tệp hải đồ</b></p><p>Mỗi tệp nhỏ tối đa:</p>
+   <select id="splitmb" style="width:100%"><option value="200">200 MB</option><option value="500" selected>500 MB</option><option value="1000">1 GB</option><option value="2000">2 GB</option></select>
+   <p class="note">Bấm Chọn tệp rồi chọn một hoặc nhiều tệp .mbtiles. Kết quả lưu trong thư mục <b>&lt;tên tệp&gt;_chia_nho</b> cạnh tệp gốc (tệp gốc giữ nguyên). Cần ổ đĩa trống bằng khoảng dung lượng tệp gốc.</p>
+   <div class="acts"><button class="b" onclick="closeModal()">Huỷ</button><button class="b p" onclick="const v=$('splitmb').value;closeModal();NA.splitMbtiles(+v)">Chọn tệp…</button></div></div>`;
+  $('modal').style.display='flex'; }
+window.onSplitProgress=function(a,b,t){ const pct=b?Math.floor(a*100/b):0; const bx=$('dlbox');
+  bx.innerHTML=`<div style="flex:1">✂ <b>${esc(t)}</b><div style="height:5px;background:#24465c;border-radius:3px;margin-top:5px"><div style="height:5px;width:${pct}%;background:#ffb74d;border-radius:3px"></div></div></div><button class="b r" style="padding:6px 10px" onclick="NA.splitCancel()">Dừng</button>`; bx.style.display='flex'; };
+window.onSplitDone=function(m){ $('dlbox').style.display='none'; toast(m); };
 function pickChart(){ if(NA) NA.pickMbtiles(); else toast('Chỉ dùng được trong app Android'); }
 function zoomChart(id){ const c=charts.find(c=>c.id===id); if(c&&c.bounds){ closePanel(); fitBounds(c.bounds); if(S.zoom<c.minzoom) S.zoom=c.minzoom; redraw(); } }
 function delChart(id){ confirmBox('Xoá hải đồ này khỏi app?',()=>{ if(NA) NA.deleteChart(id); delete set.charts[id]; saveSet(); for(const [k,v] of [...tiles]) if(k.startsWith('m_'+id+'/')){ if(v.img&&v.img.close) v.img.close(); tiles.delete(k); } refreshCharts(); showLayers(); }); }
