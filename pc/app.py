@@ -10,7 +10,7 @@ Dùng chung giao diện (web/index.html) với app Android. Phần này thay cho
 Cửa sổ dùng Microsoft Edge WebView2 (qua pywebview). Nếu không có, mở bằng Edge/trình duyệt.
 """
 import hashlib, math, http.server, io, json, os, queue, re, socket, socketserver, sqlite3, sys, threading, time
-import urllib.parse, urllib.request, webbrowser
+import shutil, urllib.parse, urllib.request, webbrowser
 
 APP_NAME = "Hải đồ VN"
 UA = "HaiDoVN-PC/1.0 (Windows; ung dung hai do ca nhan)"
@@ -650,6 +650,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if p == "/api/load":
                 f = key_file(q.get("k", ""))
                 return self.send(200, open(f, "rb").read()) if os.path.exists(f) else self.send(204)
+            if p == "/api/freespace":
+                os.makedirs(DRIVE_DIR, exist_ok=True)
+                return self.send(200, str(shutil.disk_usage(DRIVE_DIR).free).encode(), "text/plain")
             if p == "/api/drive_state":
                 return self.send(200, json.dumps(drive_meta(), ensure_ascii=False).encode("utf-8"), "application/json")
             if p == "/api/deviceid":
@@ -834,6 +837,15 @@ def drive_run(body):
             if os.path.exists(out) and drive_meta().get(name) == f.get("id"):
                 skip += 1
                 continue
+            need = int(f.get("size") or -1)
+            if need > 0:
+                part = out + ".part"
+                left = need - (os.path.getsize(part) if os.path.exists(part) else 0)
+                free = shutil.disk_usage(DRIVE_DIR).free
+                if free < left + (50 << 20):
+                    fail += 1
+                    err = "Không đủ bộ nhớ để tải %s: cần %d MB, ổ đĩa còn trống %d MB. Hãy dọn bớt ổ đĩa rồi tải lại." % (name, left >> 20, free >> 20)
+                    break
             e = drive_one(str(f.get("id")), name, out, i + 1, len(items))
             if e is None:
                 ok += 1
