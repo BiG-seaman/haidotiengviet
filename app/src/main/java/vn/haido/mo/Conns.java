@@ -6,6 +6,10 @@ import android.content.Intent;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.os.Build;
 
 import com.hoho.android.usbserial.driver.UsbSerialDriver;
@@ -15,13 +19,14 @@ import com.hoho.android.usbserial.driver.UsbSerialProber;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -45,7 +50,48 @@ public class Conns {
     final Sink sink;
     final Map<String, Conn> conns = new ConcurrentHashMap<>();
 
-    public Conns(Context ctx, Sink sink) { this.ctx = ctx; this.sink = sink; }
+    static final long NO_DATA_MS = 15000;      // không có dữ liệu quá lâu = coi như mất kết nối (thiết bị khởi động lại, mất Wi-Fi…)
+
+    public Conns(Context ctx, Sink sink) {
+        this.ctx = ctx; this.sink = sink;
+        // Wi-Fi vừa có lại (vd AIS Pilot khởi động xong) → kết nối lại ngay, không chờ
+        try {
+            ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),
+                new ConnectivityManager.NetworkCallback() {
+                    @Override public void onAvailable(Network n) { kick(); }
+                    @Override public void onLost(Network n) { kick(); }
+                });
+        } catch (Exception ignored) {}
+    }
+
+    /** Mạng Wi-Fi hiện có (kể cả Wi-Fi "không có internet" của AIS Pilot), để kết nối không bị Android đẩy sang 4G. */
+    Network wifiNet() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            for (Network n : cm.getAllNetworks()) {
+                NetworkCapabilities c = cm.getNetworkCapabilities(n);
+                if (c != null && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return n;
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    static boolean isLocal(String host) {
+        try { InetAddress a = InetAddress.getByName(host); return a.isSiteLocalAddress() || a.isLinkLocalAddress(); }
+        catch (Exception e) { return host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172."); }
+    }
+
+    /** Đóng kết nối mạng hiện tại để các kết nối thử lại ngay. */
+    void kick() {
+        for (Conn c : conns.values()) {
+            if ("serial".equals(c.type)) continue;
+            c.kicked = true;
+            try { if (c.sock != null) c.sock.close(); } catch (Exception ignored) {}
+            try { if (c.udp != null) c.udp.close(); } catch (Exception ignored) {}
+            if (c.th != null) c.th.interrupt();
+        }
+    }
 
     class Conn {
         final String id, type, host;
@@ -55,6 +101,7 @@ public class Conns {
         volatile DatagramSocket udp;
         volatile UsbSerialPort usb;
         volatile OutputStream out;
+        volatile boolean kicked;
         Thread th;
 
         Conn(JSONObject o) {
@@ -81,28 +128,51 @@ public class Conns {
                     else if ("serial".equals(type)) runUsb();
                     else runTcp();
                 } catch (Exception e) {
-                    if (run) sink.status(id, "Lỗi: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()) + " – thử lại sau 5 giây");
+                    if (run) sink.status(id, (kicked ? "Mạng Wi-Fi thay đổi, đang kết nối lại…" : "Mất kết nối: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()) + " – tự kết nối lại"));
                 }
                 try { if (sock != null) sock.close(); } catch (Exception ignored) {}
                 try { if (udp != null) udp.close(); } catch (Exception ignored) {}
                 try { if (usb != null) usb.close(); } catch (Exception ignored) {}
                 sock = null; udp = null; usb = null; out = null;
                 if (!run) break;
-                try { Thread.sleep(5000); } catch (InterruptedException e) { break; }
+                if (kicked) { kicked = false; try { Thread.sleep(1500); } catch (InterruptedException e) { if (!run) break; } continue; }
+                try { Thread.sleep(3000); } catch (InterruptedException e) { if (!run) break; }
             }
             sink.status(id, "Đã ngắt");
         }
 
         void runTcp() throws Exception {
-            Socket sk = new Socket();
+            Network wn = isLocal(host) ? wifiNet() : null;
+            Socket sk = wn != null ? wn.getSocketFactory().createSocket() : new Socket();
             sock = sk;
+            sk.setKeepAlive(true);
+            sk.setTcpNoDelay(true);
             sk.connect(new InetSocketAddress(host, port), 8000);
+            sk.setSoTimeout(3000);
             out = sk.getOutputStream();
             sink.status(id, "Đã kết nối " + host + ":" + port);
-            BufferedReader r = new BufferedReader(new InputStreamReader(sk.getInputStream(), StandardCharsets.US_ASCII));
-            String ln;
-            while (run && (ln = r.readLine()) != null) sink.line(id, ln);
-            if (run) throw new Exception("thiết bị đóng kết nối");
+            InputStream in = sk.getInputStream();
+            byte[] buf = new byte[8192];
+            StringBuilder pend = new StringBuilder();
+            long last = System.currentTimeMillis();
+            boolean warned = false;
+            while (run) {
+                int n;
+                try { n = in.read(buf); }
+                catch (SocketTimeoutException te) {
+                    long idle = System.currentTimeMillis() - last;
+                    if (idle > NO_DATA_MS) throw new Exception("không nhận dữ liệu " + (idle / 1000) + " giây");
+                    if (idle > 8000 && !warned) { warned = true; sink.status(id, "Đã kết nối nhưng chưa có dữ liệu…"); }
+                    continue;
+                }
+                if (n < 0) throw new Exception("thiết bị đóng kết nối");
+                last = System.currentTimeMillis();
+                if (warned) { warned = false; sink.status(id, "Đã kết nối " + host + ":" + port); }
+                pend.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
+                int k;
+                while ((k = pend.indexOf("\n")) >= 0) { sink.line(id, pend.substring(0, k)); pend.delete(0, k + 1); }
+                if (pend.length() > 16384) pend.setLength(0);
+            }
         }
 
         void runUdp() throws Exception {
@@ -110,11 +180,20 @@ public class Conns {
             ds.setReuseAddress(true);
             ds.bind(new InetSocketAddress(port));
             udp = ds;
+            Network wn = wifiNet();
+            if (wn != null) try { wn.bindSocket(ds); } catch (Exception ignored) {}
+            ds.setSoTimeout(3000);
             sink.status(id, "Đang nghe UDP cổng " + port);
             byte[] buf = new byte[8192];
+            long last = System.currentTimeMillis();
             while (run) {
                 DatagramPacket pk = new DatagramPacket(buf, buf.length);
-                ds.receive(pk);
+                try { ds.receive(pk); }
+                catch (SocketTimeoutException te) {
+                    if (System.currentTimeMillis() - last > NO_DATA_MS * 2) throw new Exception("không nhận dữ liệu UDP");
+                    continue;
+                }
+                last = System.currentTimeMillis();
                 String txt = new String(pk.getData(), 0, pk.getLength(), StandardCharsets.US_ASCII);
                 for (String ln : txt.split("[\\r\\n]+")) sink.line(id, ln);
             }
