@@ -133,8 +133,9 @@ let routes = store.load('routes') || [];
 let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name', planKn:6,
+                         own:{mmsi:'',vecMin:10,rings:0,ringNm:0.5}, aiso:{lostMin:3,delMin:10,rangeOn:false,rangeNm:20,ignAnch:true,anchKn:0.2,vecMin:10},
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.17';
+const APP_VER='1.18';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -323,16 +324,16 @@ function draw(){
       if(i>0) label(fmtNm(distNm(modePts[i-1],p))+' · '+fmt3(bearing(modePts[i-1],p))+'°',x+9,y+4,col); }); }
   // AIS
   const now=Date.now();
-  for(const [id,a] of ais){ if(now-a.t>(a.aton?1800000:600000)){ ais.delete(id); continue; } if(a.lat==null) continue;
+  const AO=set.aiso; for(const [id,a] of ais){ if(now-a.t>(a.aton?1800000:Math.max(1,AO.delMin)*60000)){ ais.delete(id); continue; } if(a.lat==null) continue;
     const [x,y]=ll2s(a.lat,a.lon); if(x<-30||y<-30||x>W+30||y>H+30) continue;
     if(a.aton){ ctx.beginPath(); ctx.moveTo(x,y-9); ctx.lineTo(x+7,y); ctx.lineTo(x,y+9); ctx.lineTo(x-7,y); ctx.closePath();
       ctx.fillStyle=a.virt?'rgba(255,255,255,.6)':'rgba(194,24,91,.85)'; ctx.fill(); ctx.strokeStyle='#880e4f'; ctx.lineWidth=1.5; ctx.stroke();
       if(S.zoom>=12) label(aisLbl(id,a),x+10,y+4,'#880e4f'); continue; }
     const hd=(a.hdg!=null&&a.hdg<360)?a.hdg:((a.cog!=null&&a.cog<360)?a.cog:0);
-    if(a.sog>0.5&&a.cog!=null&&S.zoom>=10){ const mpp=40075016.686*Math.cos(a.lat*D2R)/scale(), len=Math.min(a.sog*1852/6/mpp,400);
+    if(a.sog>0.5&&a.cog!=null&&S.zoom>=10&&AO.vecMin>0){ const mpp=40075016.686*Math.cos(a.lat*D2R)/scale(), len=Math.min(a.sog*1852*AO.vecMin/60/mpp,600);
       ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.sin(a.cog*D2R)*len,y-Math.cos(a.cog*D2R)*len); ctx.strokeStyle=a.risk?'#d50000':'#2e7d32'; ctx.lineWidth=1.3; ctx.setLineDash([5,4]); ctx.stroke(); ctx.setLineDash([]); }
     ctx.save(); ctx.translate(x,y); ctx.rotate(hd*D2R); ctx.beginPath(); ctx.moveTo(0,-13); ctx.lineTo(7,9); ctx.lineTo(-7,9); ctx.closePath();
-    ctx.fillStyle=now-a.t>180000?'rgba(120,120,120,.7)':(a.risk?'rgba(213,0,0,.9)':(a.stype===30||a.nav===7?'rgba(255,160,0,.9)':'rgba(46,160,67,.85)')); ctx.fill(); ctx.strokeStyle='#103'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
+    ctx.fillStyle=now-a.t>Math.max(0.5,AO.lostMin)*60000?'rgba(120,120,120,.7)':(a.risk?'rgba(213,0,0,.9)':(a.stype===30||a.nav===7?'rgba(255,160,0,.9)':'rgba(46,160,67,.85)')); ctx.fill(); ctx.strokeStyle='#103'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
     if(a.risk){ ctx.beginPath(); ctx.arc(x,y,18,0,7); ctx.strokeStyle='#d50000'; ctx.lineWidth=2.5; ctx.stroke(); }
     if(S.zoom>=11||a.risk) label(aisLbl(id,a),x+12,y+4,a.risk?'#b71c1c':'#1b5e20'); }
   // neo
@@ -343,7 +344,8 @@ function draw(){
   if(fix){ const [x,y]=ll2s(fix.lat,fix.lon), mpp=40075016.686*Math.cos(fix.lat*D2R)/scale();
     const moving=fix.sog>0.5&&fix.cog!=null, head=fix.hdg!=null?fix.hdg:(moving?fix.cog:null), stale=!fresh(fix.t,6000);
     if(fix.hdg!=null){ const L=Math.max(70,Math.min(W,H)/3); ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.sin(fix.hdg*D2R)*L,y-Math.cos(fix.hdg*D2R)*L); ctx.strokeStyle='rgba(13,71,161,.6)'; ctx.lineWidth=1.2; ctx.stroke(); }
-    if(moving){ const len=Math.min(fix.sog*1852/6/mpp,Math.max(W,H)); // vectơ 10 phút theo hướng đi
+    if(set.own.rings>0){ for(let i=1;i<=set.own.rings;i++){ const r=set.own.ringNm*i*1852/mpp; if(r<4) continue; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.strokeStyle='rgba(198,40,40,.7)'; ctx.lineWidth=1.2; ctx.setLineDash([6,5]); ctx.stroke(); ctx.setLineDash([]); label((set.own.ringNm*i)+' nm',x+3,y-r-3,'#b71c1c'); } }
+    if(moving&&set.own.vecMin>0){ const len=Math.min(fix.sog*1852*set.own.vecMin/60/mpp,Math.max(W,H)*2); // vectơ dự đoán theo hướng đi
       ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.sin(fix.cog*D2R)*len,y-Math.cos(fix.cog*D2R)*len); ctx.strokeStyle='#0d47a1'; ctx.lineWidth=2; ctx.stroke();
       if(fix.rot!=null&&Math.abs(fix.rot)>=1){ let la=fix.lat, lo=fix.lon, h=head; const pts=[{lat:la,lon:lo}]; // đường cong dự báo theo ROT
         for(let i=0;i<20;i++){ h+=Math.max(-60,Math.min(60,fix.rot))*0.5; const d=fix.sog*0.5/60; la+=d*Math.cos(h*D2R)/60; lo+=d*Math.sin(h*D2R)/60/Math.cos(la*D2R); pts.push({lat:la,lon:lo}); }
@@ -657,7 +659,8 @@ function cpaOf(a){ if(!fix||a.lat==null) return null; const k=Math.cos(fix.lat*D
   const t=v2<1e-6?0:-(rx*vx+ry*vy)/v2;
   return {cpa:Math.hypot(rx+vx*t,ry+vy*t), tcpa:t*60, range:Math.hypot(rx,ry), rel:Math.sqrt(v2)}; }
 function checkCpa(){ const now=Date.now(), seen=new Set();
-  for(const [id,a] of ais){ a.risk=false; if(a.aton||now-a.t>180000) continue; const c=cpaOf(a); if(!c) continue;
+  const AO=set.aiso; for(const [id,a] of ais){ a.risk=false; if(a.aton||now-a.t>Math.max(0.5,AO.lostMin)*60000) continue; const c=cpaOf(a); if(!c) continue;
+    if(AO.rangeOn&&c.range>AO.rangeNm) continue; if(AO.ignAnch&&((a.sog!=null&&a.sog<AO.anchKn)||a.nav===1||a.nav===5)) continue;
     if(set.alm.cpa&&c.rel>0.5&&c.tcpa>=0&&c.tcpa<=set.alm.tcpaMin&&c.cpa<=set.alm.cpaNm){ a.risk=true; seen.add('cpa_'+id);
       setAlarm('cpa_'+id,`NGUY CƠ ĐÂM VA: ${a.name||'MMSI '+id} – CPA ${c.cpa.toFixed(2)} nm sau ${Math.round(c.tcpa)} phút, P.vị ${fmt3(bearing(fix,a))}°`); } }
   for(const k of Object.keys(alm)) if(k.startsWith('cpa_')&&!seen.has(k)) setAlarm(k,null); }
@@ -908,12 +911,12 @@ function decodeAis(line){ const m=/^!(?:AI|BS|AB|AN|SA|AR)(VD[MO]),(\d),(\d),(\d
   else return null;
   return r; }
 const AIS_KEYS=['lat','lon','sog','cog','hdg','rot','nav','name','callsign','imo','stype','len','beam','draught','dest','eta','cls','aton','atype','virt'];
-function mergeAis(r){ const a=ais.get(r.mmsi)||{}; for(const k of AIS_KEYS) if(r[k]!=null&&r[k]!=='') a[k]=r[k]; a.t=Date.now(); ais.set(r.mmsi,a); redraw(); }
+function mergeAis(r){ if(set.own.mmsi&&String(r.mmsi)===String(set.own.mmsi).trim()) return; const a=ais.get(r.mmsi)||{}; for(const k of AIS_KEYS) if(r[k]!=null&&r[k]!=='') a[k]=r[k]; a.t=Date.now(); ais.set(r.mmsi,a); redraw(); }
 function handleNmea(line){ line=String(line).trim(); const i=line.search(/[!$]/); if(i<0) return; line=line.slice(i); if(line.length<8||!nmeaOk(line)) return;
   if(line[0]==='!'){ const r=decodeAis(line); if(!r) return; nmeaCount.ais++; if(r.own) ownAis(r); else mergeAis(r); }
   else parseNmea0183(line); }
 window.onNmea=function(l){ handleNmea(l); afterNmea(); };
-window.onNmeaBatch=function(t){ for(const l of String(t).split('\n')) if(l) handleNmea(l); afterNmea(); };
+window.onNmeaBatch=function(t){ for(const l of String(t).split('\n')){ if(!l) continue; const k=l.indexOf('\t'); if(k<0) handleNmea(l); else connLine(l.slice(0,k),l.slice(k+1)); } afterNmea(); };
 function afterNmea(){ if(curSrc()==='ship'&&shipFix&&(!fix||fix.src!=='ship'||shipFix.t>fix.t)){ ship.applyT=Date.now(); applyFix(); return; }
   if(fix){ fix.hdg=fresh(ship.hdgT,10000)?ship.hdg:null; fix.rot=fresh(ship.rotT,10000)?ship.rot:null; } updTop(); redraw(); }
 window.onAisStatus=function(s){ aisStatus=s; const e=$('aisdev'); if(e) e.innerHTML=devStatus(); };
@@ -947,21 +950,97 @@ function showAisList(){ const arr=[...ais.entries()].filter(([,a])=>a.lat!=null)
     return `<div class="row" onclick="aisDetail(${id})"><div class="g"><b>${a.risk?'⚠ ':''}${esc(aisLbl(id,a))}</b><small>${a.aton?'Phao AIS':esc(shipType(a.stype)||'Chưa rõ loại')}${a.sog!=null?' · '+a.sog.toFixed(1)+' kn':''}${fix?' · '+fmtNm(d):''}${c&&!a.aton&&c.tcpa>=0?' · CPA '+fmtNm(c.cpa)+' sau '+Math.round(c.tcpa)+'ph':''}</small></div><span style="color:#8fb3c9">›</span></div>`; }).join('')
     :'<p class="note">Chưa nhận được tàu AIS nào.</p>';
   openPanel(`Tàu AIS xung quanh (${arr.length})`,h+`<div class="grid"><button class="b" onclick="showAis()">← Cài đặt AIS</button></div>`); }
-function showAis(){ openPanel('AIS & GPS tàu qua Wi‑Fi',`<p class="note">Kết nối tới thiết bị trên tàu có Wi‑Fi phát dữ liệu NMEA 0183 (AIS Pilot Plug, bộ thu AIS, máy định vị…). Điện thoại phải vào cùng mạng Wi‑Fi với thiết bị. App đọc tàu AIS xung quanh, GPS tàu (RMC, GGA, VTG), mũi tàu (HDT, HDG, HDM), tốc độ quay trở ROT và độ sâu.</p>
-  ${PC?'Địa chỉ IP thiết bị, hoặc tên cổng COM (vd COM3)':'Địa chỉ IP thiết bị'}<input id="ah" type="text" value="${esc(set.ais.host)}">${PC?'Cổng mạng, hoặc tốc độ baud với cổng COM (GPS thường 4800, AIS 38400)':'Cổng'}<input id="ap" type="number" value="${esc(set.ais.port)}">Giao thức<select id="at"><option value="tcp" ${set.ais.proto==='tcp'?'selected':''}>TCP</option><option value="udp" ${set.ais.proto==='udp'?'selected':''}>UDP (chỉ cần cổng)</option>${PC?`<option value="serial" ${set.ais.proto==='serial'?'selected':''}>Cổng COM (GPS / AIS cắm USB)</option>`:''}</select>
-  ${PC?'<div class="grid"><button class="b" onclick="findCom()">🔌 Tìm cổng COM</button></div><p class="note" id="comlist"></p>':''}
-  <div class="grid"><button class="b p" onclick="aisConnect()">Kết nối</button><button class="b r" onclick="NA&&NA.aisDisconnect()">Ngắt</button></div>
+/* ================= Kết nối thiết bị (giống trang Kết nối của OpenCPN) ================= */
+const BAUDS=[0,4800,9600,19200,38400,57600,115200];
+if(!set.conns){ const o=set.ais||{}; set.conns=[{id:'c0',name:'Thiết bị Wi‑Fi',type:o.proto||'tcp',host:o.host||'192.168.1.1',port:o.port||10110,baud:0,on:false,out:false,fmode:'ignore',filt:''}]; }
+const connSt={}, connCnt={}, mon=[]; let monPause=false, monTimer=null, apTimer=null;
+const connName=c=>c.name||(c.type==='serial'?(PC?c.host||'Cổng COM':'USB-COM'):c.type==='udp'?'UDP '+c.port:c.host+':'+c.port);
+function connLine(id,l){ const c=set.conns.find(x=>x.id===id); connCnt[id]=(connCnt[id]||0)+1;
+  if(!monPause){ mon.push([Date.now(),id,l]); if(mon.length>300) mon.splice(0,mon.length-300); }
+  if(c&&c.filt){ const i=l.search(/[!$]/), typ=i>=0?l.slice(i+3,i+6):''; const list=c.filt.toUpperCase().split(/[\s,;]+/).filter(Boolean), hit=list.includes(typ);
+    if(c.fmode==='accept'?!hit:hit) return; }
+  handleNmea(l); }
+window.onConnStatus=function(id,st){ connSt[id]=st; const c=set.conns.find(x=>x.id===id);
+  aisStatus=set.conns.filter(x=>x.on).map(x=>connName(x)+': '+(connSt[x.id]||'…')).join(' · ')||'Chưa kết nối';
+  const e=$('cst_'+id); if(e) e.textContent=st; const d=$('aisdev'); if(d) d.innerHTML=devStatus(); };
+window.onAisStatus=function(s){ aisStatus=s; const e=$('aisdev'); if(e) e.innerHTML=devStatus(); };
+function connStart(c){ if(!NA||!NA.connOpen) return; NA.connOpen(JSON.stringify({id:c.id,type:c.type,host:c.host,port:+c.port||0,baud:+c.baud||0})); }
+function connStop(c){ if(NA&&NA.connClose) NA.connClose(c.id); connSt[c.id]='Đã tắt'; }
+function connsBoot(){ for(const c of set.conns) if(c.on) connStart(c); apSchedule(); }
+function connToggle(id,on){ const c=set.conns.find(x=>x.id===id); if(!c) return; c.on=on; saveSet(); if(on) connStart(c); else connStop(c); apSchedule(); showAis(); }
+function connDel(id){ const c=set.conns.find(x=>x.id===id); if(!c) return; connStop(c); set.conns=set.conns.filter(x=>x!==c); saveSet(); showAis(); }
+function connRows(){ return set.conns.length?set.conns.map(c=>`<div class="row" style="align-items:center"><input type="checkbox" style="width:22px;height:22px" ${c.on?'checked':''} onchange="connToggle('${c.id}',this.checked)">
+   <div class="g" onclick="connEdit('${c.id}')"><b>${esc(connName(c))}</b><small>${c.type==='serial'?(PC?'COM '+esc(c.host):'USB-COM')+' · '+(+c.baud?c.baud+' baud':'tự dò baud'):c.type.toUpperCase()+(c.type==='tcp'?' '+esc(c.host):'')+' :'+c.port}${c.out?' · ⬆ gửi ra':''}${c.filt?' · lọc':''}<br><span id="cst_${c.id}" style="color:#9fc4dc">${esc(c.on?(connSt[c.id]||'…'):'Đang tắt')}</span></small></div>
+   <button class="b" style="padding:6px 10px" onclick="connEdit('${c.id}')">✎</button><button class="b r" style="padding:6px 10px" onclick="connDel('${c.id}')">✕</button></div>`).join(''):'<p class="note">Chưa có kết nối nào.</p>'; }
+function connEdit(id){ const c=set.conns.find(x=>x.id===id)||{id:'c'+Date.now().toString(36),name:'',type:'serial',host:'',port:10110,baud:0,on:true,out:false,fmode:'ignore',filt:''}; const isNew=!set.conns.includes(c);
+  openPanel(isNew?'Thêm kết nối':'Sửa kết nối',`<div class="cl">Loại kết nối</div><select id="ct" onchange="connForm()"><option value="serial" ${c.type==='serial'?'selected':''}>${PC?'Cổng COM (USB / RS232)':'Cổng COM qua cáp USB OTG'}</option><option value="tcp" ${c.type==='tcp'?'selected':''}>Mạng TCP (Wi‑Fi)</option><option value="udp" ${c.type==='udp'?'selected':''}>Mạng UDP (Wi‑Fi)</option></select>
+   <div id="cf_ser"><div class="cl">Cổng</div><div style="display:flex;gap:8px"><select id="cport" style="flex:1"></select><button class="b" style="padding:6px 12px" onclick="connPorts()">↻ Dò</button></div>
+    <div class="cl">Tốc độ baud</div><select id="cbaud">${BAUDS.map(b=>`<option value="${b}" ${(+c.baud||0)===b?'selected':''}>${b?b+' baud':'Tự dò tốc độ'}</option>`).join('')}</select>
+    <p class="note">GPS thường 4800 baud; bộ thu AIS, AIS Pilot Plug thường 38400; một số máy 9600 hoặc 115200. Chọn Tự dò nếu không rõ.${PC?'':' Cắm thiết bị qua cáp OTG, app sẽ hỏi quyền dùng USB.'}</p></div>
+   <div id="cf_net"><div id="cf_host"><div class="cl">Địa chỉ IP thiết bị</div><input id="chost" type="text" value="${esc(c.type!=='serial'?c.host:'192.168.1.1')}"></div><div class="cl">Cổng mạng</div><input id="cnport" type="number" value="${esc(c.port)}"></div>
+   <div class="cl">Tên gợi nhớ (không bắt buộc)</div><input id="cname" type="text" value="${esc(c.name)}" placeholder="vd: GPS tàu, AIS, La bàn">
+   <label class="sw"><input type="checkbox" id="con" ${c.on?'checked':''}>Bật kết nối này</label>
+   <label class="sw"><input type="checkbox" id="cout" ${c.out?'checked':''}>Gửi dữ liệu ra cổng này (máy lái tự động / máy lặp NMEA)</label>
+   <div class="cl">Lọc câu NMEA nhận vào</div><select id="cfm"><option value="ignore" ${c.fmode!=='accept'?'selected':''}>Bỏ qua các câu</option><option value="accept" ${c.fmode==='accept'?'selected':''}>Chỉ nhận các câu</option></select>
+   <input id="cfilt" type="text" value="${esc(c.filt)}" placeholder="vd: GSV, GSA (để trống = nhận tất cả)">
+   <div class="grid"><button class="b" onclick="showAis()">Huỷ</button><button class="b p" onclick="connSave('${c.id}')">💾 Lưu</button></div>`);
+  window._ce=c; connForm(); connPorts(c.type==='serial'?c.host:''); }
+function connForm(){ const t=$('ct').value; $('cf_ser').style.display=t==='serial'?'':'none'; $('cf_net').style.display=t==='serial'?'none':''; $('cf_host').style.display=t==='tcp'?'':'none'; }
+function connPorts(sel){ let l=[]; try{ l=JSON.parse(NA&&NA.listSerial?NA.listSerial():'[]'); }catch(e){} const cur=sel!=null?sel:$('cport').value;
+  if(cur&&!l.some(p=>p.port===cur)) l.push({port:cur,desc:'chưa thấy – kiểm tra cáp'});
+  $('cport').innerHTML=l.length?l.map(p=>`<option value="${esc(p.port)}" ${p.port===cur?'selected':''}>${esc(PC?p.port+' – '+p.desc:p.desc)}</option>`).join(''):`<option value="">${PC?'Không thấy cổng COM – cắm thiết bị, cài driver rồi bấm Dò':'Chưa thấy thiết bị USB – cắm qua cáp OTG rồi bấm Dò'}</option>`; }
+function connSave(id){ const old=set.conns.find(x=>x.id===id), t=$('ct').value;
+  const c={id,name:$('cname').value.trim(),type:t,host:t==='serial'?$('cport').value:$('chost').value.trim(),port:parseInt($('cnport').value)||10110,baud:+$('cbaud').value||0,on:$('con').checked,out:$('cout').checked,fmode:$('cfm').value,filt:$('cfilt').value.trim()};
+  if(t==='serial'&&!c.host&&PC) return toast('Chưa chọn cổng COM');
+  if(t==='tcp'&&!c.host) return toast('Chưa nhập địa chỉ IP');
+  if(old){ connStop(old); Object.assign(old,c); } else set.conns.push(c); saveSet(); if(c.on) connStart(c); apSchedule(); showAis(); toast('Đã lưu kết nối'); }
+function showMon(){ openPanel('Dữ liệu NMEA nhận được',`<div class="grid"><button class="b" id="monp" onclick="monPause=!monPause;this.textContent=monPause?'▶ Tiếp tục':'⏸ Tạm dừng'">${monPause?'▶ Tiếp tục':'⏸ Tạm dừng'}</button><button class="b" onclick="mon.length=0;monDraw()">🗑 Xoá</button></div>
+  <div id="monbox" style="font:12px ui-monospace,monospace;background:#061521;border-radius:8px;padding:8px;height:52vh;overflow:auto;white-space:pre;color:#bfe3ff"></div>
+  <div class="grid"><button class="b" onclick="clearInterval(monTimer);showAis()">← Kết nối</button></div>`); monDraw(); clearInterval(monTimer); monTimer=setInterval(()=>{ if(!$('monbox')){ clearInterval(monTimer); return; } if(!monPause) monDraw(); },1000); }
+function monDraw(){ const b=$('monbox'); if(!b) return; const nm={}; set.conns.forEach(c=>nm[c.id]=connName(c));
+  b.textContent=mon.slice(-150).map(([t,id,l])=>new Date(t).toLocaleTimeString('vi-VN',{hour12:false})+' ['+(nm[id]||id)+'] '+l).join('\n')||'(chưa có dữ liệu)'; b.scrollTop=b.scrollHeight; }
+/* Gửi lệnh dẫn đường ra máy lái tự động (RMB, APB, XTE) khi đang chạy theo điểm / tuyến */
+const nmeaCs=s=>{ let c=0; for(let i=0;i<s.length;i++) c^=s.charCodeAt(i); return '$'+s+'*'+c.toString(16).toUpperCase().padStart(2,'0')+'\r\n'; };
+const nmeaFmtLL=(v,lat)=>{ const a=Math.abs(v), d=Math.floor(a), m=(a-d)*60; return (lat?String(d).padStart(2,'0'):String(d).padStart(3,'0'))+m.toFixed(4).padStart(7,'0')+','+(lat?(v>=0?'N':'S'):(v>=0?'E':'W')); };
+function apSchedule(){ clearInterval(apTimer); if(set.conns.some(c=>c.on&&c.out)) apTimer=setInterval(apSend,1000); }
+function apSend(){ const outs=set.conns.filter(c=>c.on&&c.out); if(!outs.length||!NA||!NA.connSend) return; let txt='';
+  if(fix&&fresh(fix.t,10000)){ const d=new Date(fix.t), p=x=>String(x).padStart(2,'0'), hms=p(d.getUTCHours())+p(d.getUTCMinutes())+p(d.getUTCSeconds())+'.00', dmy=p(d.getUTCDate())+p(d.getUTCMonth()+1)+String(d.getUTCFullYear()).slice(2);
+    txt+=nmeaCs(`GPRMC,${hms},A,${nmeaFmtLL(fix.lat,1)},${nmeaFmtLL(fix.lon,0)},${(fix.sog||0).toFixed(1)},${fix.cog!=null?fix.cog.toFixed(1):''},${dmy},,,A`);
+    if(nav){ const t=nav.pts[nav.idx], from=nav.from||fix, x=distNm(from,t)>0.01?xteNm(from,t,fix):0, ax=Math.abs(x).toFixed(3), dir=x>0?'L':'R';   // lệch phải → lái sang trái
+      const rng=distNm(fix,t), brg=bearing(fix,t), bo=bearing(from,t), vmg=(fix.sog||0)*Math.cos(((fix.cog||brg)-brg)*D2R), arr=rng<0.05?'A':'V';
+      const fromId=nav.idx>0?'WP'+nav.idx:'ORIG', toId='WP'+(nav.idx+1);
+      txt+=nmeaCs(`GPRMB,A,${ax},${dir},${fromId},${toId},${nmeaFmtLL(t.lat,1)},${nmeaFmtLL(t.lon,0)},${Math.min(rng,999.9).toFixed(1)},${brg.toFixed(1)},${Math.max(-99.9,Math.min(99.9,vmg)).toFixed(1)},${arr},A`);
+      txt+=nmeaCs(`GPAPB,A,A,${ax},${dir},N,${arr},V,${bo.toFixed(1)},T,${toId},${brg.toFixed(1)},T,${brg.toFixed(1)},T,A`);
+      txt+=nmeaCs(`GPXTE,A,A,${ax},${dir},N,A`); } }
+  if(txt) for(const c of outs) NA.connSend(c.id,txt); }
+function showAis(){ openPanel('AIS & kết nối thiết bị',`<p class="note">Nhận dữ liệu NMEA 0183 từ thiết bị trên tàu: bộ thu AIS, AIS Pilot Plug, GPS, la bàn, máy đo sâu… qua <b>cổng COM</b>${PC?'':' (cáp USB OTG)'} hoặc <b>Wi‑Fi</b> (TCP/UDP). Có thể bật nhiều kết nối cùng lúc.</p>
+  <h3>🔌 Kết nối</h3>${connRows()}
+  <div class="grid"><button class="b p" onclick="connEdit()">＋ Thêm kết nối</button><button class="b" onclick="showMon()">📜 Xem dữ liệu NMEA</button></div>
   <p id="aisdev" style="line-height:1.6">${devStatus()}</p>
-  <div class="grid"><button class="b p" onclick="showAisList()">🚢 Danh sách tàu AIS (${ais.size})</button></div>
+  <div class="grid"><button class="b p" onclick="showAisList()">🚢 Danh sách tàu AIS (${ais.size})</button><button class="b" onclick="showAisOpt()">⚙ Tuỳ chọn AIS & tàu mình</button></div>
   <h3>Hiển thị tàu AIS</h3><select onchange="set.aisLabel=this.value;saveSet();redraw()"><option value="name" ${set.aisLabel!=='mmsi'?'selected':''}>Theo tên tàu (chưa có tên thì hiện MMSI)</option><option value="mmsi" ${set.aisLabel==='mmsi'?'selected':''}>Theo số MMSI</option></select>
   <h3>Vị trí tàu mình lấy từ</h3><select onchange="set.posSrc=this.value;saveSet();applyFix();const e=$('aisdev');if(e)e.innerHTML=devStatus()">
    <option value="auto" ${set.posSrc==='auto'?'selected':''}>Tự động: ưu tiên GPS tàu, mất thì dùng GPS máy</option>
-   <option value="ship" ${set.posSrc==='ship'?'selected':''}>Chỉ GPS tàu (qua Wi‑Fi)</option>
-   <option value="phone" ${set.posSrc==='phone'?'selected':''}>Chỉ GPS của điện thoại / máy tính bảng</option></select>
-  <p class="note">GPS tàu có anten đặt ngoài trời nên thường chính xác và ổn định hơn GPS máy. Khi có mũi tàu (HDG), biểu tượng tàu xoay theo mũi tàu kể cả khi đứng yên; khi có ROT, app vẽ đường cong dự báo 10 phút tới.</p>`); }
-function findCom(){ let l=[]; try{ l=JSON.parse(NA.listSerial()); }catch(e){}
-  $('comlist').innerHTML=l.length?'Có các cổng: '+l.map(c=>`<a href="#" style="color:#7cc4ff" onclick="$('ah').value='${esc(c.port)}';$('at').value='serial';return false">${esc(c.port)}</a> (${esc(c.desc)})`).join(', ')+'. Bấm tên cổng để chọn.':'Không thấy cổng COM nào. Kiểm tra đã cắm thiết bị và cài driver.'; }
-function aisConnect(){ set.ais={host:$('ah').value.trim(),port:parseInt($('ap').value)||10110,proto:$('at').value}; saveSet(); if(NA) NA.aisConnect(set.ais.host,set.ais.port,set.ais.proto); else toast('Chỉ dùng được trong app Android'); }
+   <option value="ship" ${set.posSrc==='ship'?'selected':''}>Chỉ GPS tàu (qua kết nối)</option>
+   <option value="phone" ${set.posSrc==='phone'?'selected':''}>Chỉ GPS của ${PC?'máy tính':'điện thoại / máy tính bảng'}</option></select>
+  <p class="note">Khi bật "Gửi dữ liệu ra" ở một kết nối và đang chạy theo điểm/tuyến, app gửi câu RMB, APB, XTE (và RMC) mỗi giây để máy lái tự động bám tuyến.</p>`); }
+function showAisOpt(){ const O=set.own, A=set.aiso, ck=(id,v)=>`<input type="checkbox" id="${id}" ${v?'checked':''}>`;
+  openPanel('Tuỳ chọn AIS & tàu mình',`<h3 style="margin-top:4px">🚤 Tàu mình</h3>
+  <div class="cl">Số MMSI tàu mình (9 số, để không báo va với chính mình)</div><input id="omm" type="text" inputmode="numeric" value="${esc(O.mmsi)}">
+  <div class="cl">Độ dài vectơ dự đoán hướng đi (phút, 0 = tắt)</div><input id="ovec" type="number" value="${O.vecMin}">
+  <div class="cl">Vòng cự ly quanh tàu</div><div style="display:flex;gap:8px"><select id="orn" style="flex:1">${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${O.rings==n?'selected':''}>${n?n+' vòng':'Không'}</option>`).join('')}</select><input id="ornm" type="number" inputmode="decimal" step="any" style="flex:1" value="${O.ringNm}"><span style="align-self:center">nm/vòng</span></div>
+  <h3>🚢 Tàu AIS</h3>
+  <div class="cl">Đánh dấu mất tín hiệu (xám) sau (phút)</div><input id="alost" type="number" inputmode="decimal" step="any" value="${A.lostMin}">
+  <div class="cl">Xoá khỏi hải đồ sau (phút)</div><input id="adel" type="number" inputmode="decimal" step="any" value="${A.delMin}">
+  <div class="cl">Độ dài vectơ dự đoán tàu AIS (phút, 0 = tắt)</div><input id="avec" type="number" value="${A.vecMin}">
+  <label class="sw">${ck('arng',A.rangeOn)}Chỉ cảnh báo va với tàu trong phạm vi (hải lý):</label><input id="arngn" type="number" inputmode="decimal" step="any" value="${A.rangeNm}">
+  <label class="sw">${ck('aanc',A.ignAnch)}Không cảnh báo tàu đang neo/buộc hoặc chạy chậm hơn (kn):</label><input id="aancn" type="number" inputmode="decimal" step="any" value="${A.anchKn}">
+  <div class="grid"><button class="b" onclick="showAis()">← Quay lại</button><button class="b p" onclick="saveAisOpt()">💾 Lưu</button></div>
+  <p class="note">Ngưỡng CPA/TCPA cài ở mục ⚠ Báo động.</p>`); }
+function saveAisOpt(){ const n=(id,def,min)=>{ const v=parseFloat(String($(id).value).replace(',','.')); return isFinite(v)&&v>=min?v:def; };
+  set.own={mmsi:$('omm').value.replace(/\D/g,'').slice(0,9),vecMin:n('ovec',10,0),rings:+$('orn').value,ringNm:n('ornm',0.5,0.01)};
+  set.aiso={lostMin:n('alost',3,0.5),delMin:n('adel',10,1),vecMin:n('avec',10,0),rangeOn:$('arng').checked,rangeNm:n('arngn',20,0.1),ignAnch:$('aanc').checked,anchKn:n('aancn',0.2,0)};
+  if(set.own.mmsi) ais.delete(+set.own.mmsi); saveSet(); checkCpa(); redraw(); toast('Đã lưu tuỳ chọn'); showAis(); }
 
 /* ================= GPX ================= */
 function buildGpx(){ const x=s=>esc(s); let o='<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="HaiDoVN" xmlns="http://www.topografix.com/GPX/1/1">\n';
@@ -987,7 +1066,7 @@ function showMenu(){ openPanel('Chức năng',`<div class="grid">
   <button class="b" onclick="showWpts()">📍 Điểm đánh dấu</button><button class="b" onclick="showRoutes()">〰 Tuyến đường</button>
   <button class="b" onclick="showTracks()">👣 Vết đi${rec?' (đang ghi)':''}</button><button class="b" onclick="startMode('measure')">📏 Đo khoảng cách</button>
   <button class="b" onclick="showAlarms()">⚠ Báo động${Object.keys(alm).length?' (!)':''}</button><button class="b" onclick="showWeather()">🌬 Thời tiết biển</button>
-  <button class="b" onclick="showAis()">📡 AIS</button><button class="b" onclick="showLayers()">▤ Hải đồ</button>
+  <button class="b" onclick="showAis()">📡 AIS & Kết nối</button><button class="b" onclick="showLayers()">▤ Hải đồ</button>
   <button class="b" onclick="showGpx()">⇅ Nhập / Xuất GPX</button><button class="b" onclick="showLicense()">🔑 Bản quyền${licSt.ok&&licSt.exp-licNow()<7*86400000?' (!)':''}</button>
   <button class="b" onclick="showInfo()">ℹ Thông tin</button></div>
   <p class="note">Nhấn giữ trên hải đồ để đánh dấu điểm, đi tới, đo hoặc xem dự báo tại chỗ đó. Ứng dụng chỉ hỗ trợ tham khảo, không thay thế hải đồ chính thức và thiết bị hàng hải.</p>`); }
@@ -1119,6 +1198,7 @@ window.addEventListener('online',fetchNotices);
 if(anchor) redraw();
 if(!NA && navigator.geolocation) navigator.geolocation.watchPosition(p=>window.onGps(p.coords.latitude,p.coords.longitude,p.coords.speed==null?-1:p.coords.speed,p.coords.heading==null?-1:p.coords.heading,p.coords.accuracy,p.timestamp),()=>{}, {enableHighAccuracy:true});
 if(NA) NA.ready();
+setTimeout(connsBoot,1500);   // bật lại các kết nối thiết bị đã lưu
 </script>
 </body>
 </html>
