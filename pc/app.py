@@ -448,18 +448,34 @@ def online_tile(src, z, x, y):
 
 
 # ---------------- NMEA: Wi-Fi (TCP/UDP) hoặc cổng COM ----------------
+BAUDS = [4800, 38400, 9600, 115200, 19200, 57600]
+
+
+def nmea_valid(s):
+    a = max(s.find("$"), s.find("!"))
+    st = s.find("*", a)
+    if a < 0 or st < 0 or st + 3 > len(s):
+        return False
+    c = 0
+    for ch in s[a + 1:st]:
+        c ^= ord(ch)
+    try:
+        return int(s[st + 1:st + 3], 16) == c
+    except ValueError:
+        return False
+
+
 class Nmea:
+    """Nhiều kết nối NMEA 0183 cùng lúc (giống trang Kết nối của OpenCPN): cổng COM (có tự dò baud), TCP, UDP."""
+
     def __init__(self):
-        self.th = None
-        self.stop_ev = threading.Event()
+        self.conns = {}          # id -> {"stop": Event, "write": fn|None}
         self.buf = []
         self.blk = threading.Lock()
-        self.status = "Chưa kết nối"
         threading.Thread(target=self.flusher, daemon=True).start()
 
-    def set_status(self, s):
-        self.status = s
-        EV.send("onAisStatus", s)
+    def status(self, cid, s):
+        EV.send("onConnStatus", cid, s)
 
     def flusher(self):
         while True:
@@ -470,42 +486,56 @@ class Nmea:
                 txt = "\n".join(self.buf); self.buf = []
             EV.send("onNmeaBatch", txt)
 
-    def line(self, ln):
+    def line(self, cid, ln):
         ln = ln.strip()
         if 6 <= len(ln) <= 300 and ("!" in ln or "$" in ln):
             with self.blk:
                 if len(self.buf) < 5000:
-                    self.buf.append(ln)
+                    self.buf.append(cid + "\t" + ln)
 
+    # tương thích bản cũ (một kết nối)
     def connect(self, host, port, proto):
-        self.disconnect()
-        self.stop_ev = threading.Event()
-        self.th = threading.Thread(target=self.run, args=(host, port, proto, self.stop_ev), daemon=True)
-        self.th.start()
+        self.open({"id": "c0", "type": proto, "host": host, "port": port, "baud": port})
 
     def disconnect(self):
-        self.stop_ev.set()
-        self.th = None
+        for cid in list(self.conns):
+            self.close(cid)
 
-    def run(self, host, port, proto, stop):
+    def open(self, cfg):
+        cid = str(cfg.get("id") or "c0")
+        self.close(cid)
+        c = {"stop": threading.Event(), "write": None}
+        self.conns[cid] = c
+        threading.Thread(target=self.run, args=(cid, cfg, c), daemon=True).start()
+
+    def close(self, cid):
+        c = self.conns.pop(cid, None)
+        if c:
+            c["stop"].set()
+
+    def send(self, cid, text):
+        c = self.conns.get(cid)
+        if c and c["write"]:
+            try:
+                c["write"](text.encode("ascii", "ignore"))
+            except Exception as e:
+                log("nmea send", e)
+
+    def run(self, cid, cfg, c):
+        stop = c["stop"]
+        typ = cfg.get("type", "tcp")
+        host = str(cfg.get("host", ""))
+        port = int(cfg.get("port") or 10110)
         while not stop.is_set():
             try:
-                self.set_status("Đang kết nối…")
-                if proto == "serial":
-                    import serial
-                    with serial.Serial(host, int(port) or 4800, timeout=1) as sp:
-                        self.set_status(f"Đã mở cổng {host} ({port} baud)")
-                        pending = b""
-                        while not stop.is_set():
-                            pending += sp.read(4096)
-                            *lines, pending = pending.split(b"\n")
-                            for l in lines:
-                                self.line(l.decode("ascii", "ignore"))
-                elif proto == "udp":
+                self.status(cid, "Đang kết nối…")
+                if typ == "serial":
+                    self.run_serial(cid, host, int(cfg.get("baud") or 0), c)
+                elif typ == "udp":
                     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    s.bind(("", int(port))); s.settimeout(1)
-                    self.set_status(f"Đang nghe UDP cổng {port}")
+                    s.bind(("", port)); s.settimeout(1)
+                    self.status(cid, f"Đang nghe UDP cổng {port}")
                     with s:
                         while not stop.is_set():
                             try:
@@ -513,11 +543,12 @@ class Nmea:
                             except socket.timeout:
                                 continue
                             for l in d.decode("ascii", "ignore").splitlines():
-                                self.line(l)
+                                self.line(cid, l)
                 else:
-                    with socket.create_connection((host, int(port)), timeout=8) as s:
+                    with socket.create_connection((host, port), timeout=8) as s:
                         s.settimeout(1)
-                        self.set_status(f"Đã kết nối {host}:{port}")
+                        c["write"] = s.sendall
+                        self.status(cid, f"Đã kết nối {host}:{port}")
                         pending = b""
                         while not stop.is_set():
                             try:
@@ -525,18 +556,50 @@ class Nmea:
                             except socket.timeout:
                                 continue
                             if not d:
-                                break
+                                raise IOError("thiết bị đóng kết nối")
                             pending += d
                             *lines, pending = pending.split(b"\n")
                             for l in lines:
-                                self.line(l.decode("ascii", "ignore"))
+                                self.line(cid, l.decode("ascii", "ignore"))
             except Exception as e:
-                log("nmea", e)
+                log("nmea", cid, e)
+                if not stop.is_set():
+                    self.status(cid, "Lỗi: %s – thử lại sau 5 giây" % e)
+            c["write"] = None
             if stop.is_set():
                 break
-            self.set_status("Mất kết nối, thử lại sau 5 giây")
             stop.wait(5)
-        self.set_status("Đã ngắt")
+        self.status(cid, "Đã ngắt")
+
+    def run_serial(self, cid, port, baud, c):
+        import serial
+        stop = c["stop"]
+        for b in ([baud] if baud else BAUDS):
+            if stop.is_set():
+                return
+            with serial.Serial(port, b, timeout=0.5) as sp:
+                c["write"] = sp.write
+                probing = not baud
+                self.status(cid, f"Đang dò tốc độ {b} baud…" if probing else f"Đã mở cổng {port} ({b} baud)")
+                t0, ok, pending = time.time(), not probing, b""
+                while not stop.is_set():
+                    pending += sp.read(4096)
+                    *lines, pending = pending.split(b"\n")
+                    for l in lines:
+                        t = l.decode("ascii", "ignore").strip()
+                        if not ok and nmea_valid(t):
+                            ok = True
+                            self.status(cid, f"Đã mở cổng {port} (tự dò: {b} baud)")
+                        if ok:
+                            self.line(cid, t)
+                    if len(pending) > 8192:
+                        pending = b""
+                    if not ok and time.time() - t0 > 3:
+                        break
+                c["write"] = None
+                if ok:
+                    raise IOError("mất kết nối cổng " + port)
+        raise IOError("không nhận ra dữ liệu NMEA ở các tốc độ baud")
 
 
 NMEA = Nmea()
@@ -732,6 +795,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     webbrowser.open(b)
                 elif b.startswith("tel:"):
                     toast("Gọi số " + b[4:] + " bằng điện thoại")
+                return self.send(204)
+            if p == "/api/conn_open":
+                NMEA.open(json.loads(b or "{}"))
+                return self.send(204)
+            if p == "/api/conn_close":
+                NMEA.close(q.get("id", ""))
+                return self.send(204)
+            if p == "/api/conn_send":
+                NMEA.send(q.get("id", ""), b)
                 return self.send(204)
             if p == "/api/ais_connect":
                 NMEA.connect(q.get("host", ""), q.get("port", "10110"), q.get("proto", "tcp"))

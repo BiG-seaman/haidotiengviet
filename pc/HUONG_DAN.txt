@@ -19,12 +19,19 @@ HẢI ĐỒ
 - Trên máy tính, tệp được dùng ngay tại chỗ, KHÔNG chép. Đừng di chuyển hay xoá tệp gốc.
   Nút "Xoá" trong app chỉ gỡ tệp khỏi danh sách.
 
-GPS VÀ AIS
-- Máy tính thường không có GPS. Nối GPS/AIS theo một trong hai cách, ở mục ☰ > 📡 AIS:
-  1) Qua Wi-Fi (AIS Pilot Plug, bộ thu AIS có Wi-Fi...): nhập địa chỉ IP, cổng, chọn TCP hoặc UDP.
-  2) Qua dây USB (GPS chuột, bộ thu AIS USB): chọn "Cổng COM", bấm "Tìm cổng COM", chọn cổng,
-     nhập tốc độ baud (GPS thường 4800, AIS thường 38400), bấm Kết nối.
-- Mục "Vị trí tàu mình lấy từ" để ở "Tự động" là dùng GPS tàu khi có.
+GPS, AIS VÀ THIẾT BỊ NGOẠI VI (mục ☰ > 📡 AIS & Kết nối)
+- Có thể bật nhiều kết nối cùng lúc (giống OpenCPN), ví dụ GPS qua cổng COM + AIS qua Wi-Fi.
+- Bấm "＋ Thêm kết nối", chọn loại:
+  1) Cổng COM (dây USB / RS232): chọn cổng, chọn tốc độ baud (GPS thường 4800, AIS 38400,
+     hoặc "Tự dò tốc độ" nếu không rõ). Cần cài driver của cáp (CH340, CP210x, PL2303, FTDI…).
+  2) Mạng TCP: nhập địa chỉ IP và cổng (AIS Pilot Plug, bộ thu AIS có Wi-Fi…).
+  3) Mạng UDP: chỉ cần cổng.
+- "Lọc câu NMEA": bỏ qua hoặc chỉ nhận một số câu (vd GSV, GSA).
+- "Gửi dữ liệu ra cổng này": khi chạy theo điểm/tuyến, app gửi RMB, APB, XTE, RMC mỗi giây
+  cho máy lái tự động.
+- "📜 Xem dữ liệu NMEA": xem trực tiếp dữ liệu nhận được để kiểm tra thiết bị.
+- "⚙ Tuỳ chọn AIS & tàu mình": MMSI tàu mình, vòng cự ly, độ dài vectơ dự đoán, thời gian
+  đánh dấu/xoá tàu mất tín hiệu, chỉ cảnh báo va trong phạm vi, bỏ qua tàu neo.
 
 PHÍM TẮT
 - Lăn chuột: phóng to/thu nhỏ. Kéo chuột: di chuyển bản đồ. Nhấn giữ chuột trái: menu tại điểm đó.
