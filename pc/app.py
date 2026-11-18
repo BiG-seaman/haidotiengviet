@@ -449,6 +449,7 @@ def online_tile(src, z, x, y):
 
 # ---------------- NMEA: Wi-Fi (TCP/UDP) hoặc cổng COM ----------------
 BAUDS = [4800, 38400, 9600, 115200, 19200, 57600]
+NO_DATA_S = 15          # không có dữ liệu quá lâu = coi như mất kết nối
 
 
 def nmea_valid(s):
@@ -537,26 +538,47 @@ class Nmea:
                     s.bind(("", port)); s.settimeout(1)
                     self.status(cid, f"Đang nghe UDP cổng {port}")
                     with s:
+                        last = time.time()
                         while not stop.is_set():
                             try:
                                 d, _ = s.recvfrom(8192)
                             except socket.timeout:
+                                if time.time() - last > NO_DATA_S * 2:
+                                    raise IOError("không nhận dữ liệu UDP")
                                 continue
+                            last = time.time()
                             for l in d.decode("ascii", "ignore").splitlines():
                                 self.line(cid, l)
                 else:
                     with socket.create_connection((host, port), timeout=8) as s:
                         s.settimeout(1)
+                        try:
+                            s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                            if hasattr(socket, "SIO_KEEPALIVE_VALS"):
+                                s.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 5000, 2000))
+                        except Exception:
+                            pass
                         c["write"] = s.sendall
                         self.status(cid, f"Đã kết nối {host}:{port}")
-                        pending = b""
+                        pending, last, warned = b"", time.time(), False
                         while not stop.is_set():
                             try:
                                 d = s.recv(8192)
                             except socket.timeout:
+                                idle = time.time() - last
+                                # thiết bị tắt nguồn / khởi động lại thường không báo ngắt → tự phát hiện và kết nối lại
+                                if idle > NO_DATA_S:
+                                    raise IOError("không nhận dữ liệu %d giây" % idle)
+                                if idle > 8 and not warned:
+                                    warned = True
+                                    self.status(cid, "Đã kết nối nhưng chưa có dữ liệu…")
                                 continue
                             if not d:
                                 raise IOError("thiết bị đóng kết nối")
+                            last = time.time()
+                            if warned:
+                                warned = False
+                                self.status(cid, f"Đã kết nối {host}:{port}")
                             pending += d
                             *lines, pending = pending.split(b"\n")
                             for l in lines:
@@ -564,11 +586,11 @@ class Nmea:
             except Exception as e:
                 log("nmea", cid, e)
                 if not stop.is_set():
-                    self.status(cid, "Lỗi: %s – thử lại sau 5 giây" % e)
+                    self.status(cid, "Mất kết nối: %s – tự kết nối lại" % e)
             c["write"] = None
             if stop.is_set():
                 break
-            stop.wait(5)
+            stop.wait(3)
         self.status(cid, "Đã ngắt")
 
     def run_serial(self, cid, port, baud, c):
