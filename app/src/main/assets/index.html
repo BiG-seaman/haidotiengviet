@@ -134,7 +134,7 @@ let tracks = store.load('tracks') || [];
 let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', ais:{host:'192.168.1.1',port:10110,proto:'tcp'},
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name', planKn:6,
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.15';
+const APP_VER='1.16';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -733,14 +733,21 @@ async function drvOpen(key){ if(drvBusy) return toast('Đang tải hải đồ�
   if(j.error) return toast(j.error); const files=j.files||[]; if(!files.length) return toast(c.name+': chưa có tệp nào.');
   let have={}; try{ have=JSON.parse(NA.driveState()||'{}'); }catch(e){}
   const safe=n=>n.replace(PC?/[\\/:*?"<>|]/g:/[^\p{L}\p{N}._ &()-]/gu,'_');
-  const todo=files.filter(f=>have[safe(f.name)]!==f.id);
-  $('toast').style.display='none'; modalCb=()=>drvStart(todo.length?todo:files, c.name);
+  const todo=files.filter(f=>have[safe(f.name)]!==f.id), list=todo.length?todo:files;
+  const known=list.filter(f=>f.size>0), unknown=list.length-known.length, need=known.reduce((t,f)=>t+f.size,0);
+  let free=-1; try{ free=NA.freeSpace?+NA.freeSpace():-1; }catch(e){}
+  const MARGIN=100*1048576, short=free>=0&&need+MARGIN>free;
+  const sz=x=>x>=1073741824?(x/1073741824).toFixed(2)+' GB':x>0?mb(x)+' MB':'?';
+  $('toast').style.display='none'; modalCb=short?null:()=>drvStart(list, c.name);
   $('modal').innerHTML=`<div class="box"><p><b>${esc(j.name||c.name)}</b>: ${files.length} tệp hải đồ${todo.length<files.length?`, đã có ${files.length-todo.length}`:''}.</p>
-    <div style="max-height:40vh;overflow:auto;margin:6px 0 10px;font-size:14px">${files.map(f=>`<div>${have[safe(f.name)]===f.id?'✅':'⬇'} ${esc((f.dir?f.dir+' / ':'')+f.name)}</div>`).join('')}</div>
-    <p class="note">${todo.length?'Tải '+todo.length+' tệp còn thiếu. Tệp hải đồ thường nặng (hàng trăm MB), nên dùng Wi‑Fi.':'Đã có đủ. Bấm Tải lại nếu muốn tải lại tất cả.'}</p>
-    <div class="acts"><button class="b" onclick="closeModal()">Huỷ</button><button class="b p" onclick="okModal()">${todo.length?'⬇ Tải '+todo.length+' tệp':'Tải lại'}</button></div></div>`;
+    <div style="max-height:36vh;overflow:auto;margin:6px 0 8px;font-size:14px">${files.map(f=>`<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #1d3a50"><span style="flex:1">${have[safe(f.name)]===f.id?'✅':'⬇'} ${esc((f.dir?f.dir+' / ':'')+f.name)}</span><span style="white-space:nowrap;color:#9fc4dc">${sz(f.size)}</span></div>`).join('')}</div>
+    <div style="font-size:15px;line-height:1.6">${todo.length?'Cần tải':'Tải lại'}: <b>${list.length} tệp – ${sz(need)}</b>${unknown?` <span class="note">(+${unknown} tệp chưa rõ dung lượng)</span>`:''}<br>
+    Bộ nhớ ${PC?'ổ đĩa':'máy'} còn trống: <b style="color:${short?'#ff8a80':'#7ee787'}">${free>=0?sz(free):'không rõ'}</b>${free>=0&&!short?` → sau khi tải còn ~${sz(free-need)}`:''}</div>
+    ${short?`<p style="color:#ff8a80;margin:10px 0 0"><b>⚠ Không đủ bộ nhớ.</b> Cần thêm khoảng <b>${sz(need+MARGIN-free)}</b>. Hãy xoá bớt ảnh, video, ứng dụng không dùng hoặc hải đồ cũ (mục Hải đồ của bạn ▸ Xoá) rồi bấm tải lại.</p>`
+      :`<p class="note">${todo.length?'Tệp hải đồ thường nặng, nên dùng Wi‑Fi.':'Đã có đủ. Bấm Tải lại nếu muốn tải lại tất cả.'}</p>`}
+    <div class="acts"><button class="b" onclick="closeModal()">${short?'Đóng':'Huỷ'}</button>${short?'':`<button class="b p" onclick="okModal()">${todo.length?'⬇ Tải '+todo.length+' tệp':'Tải lại'}</button>`}</div></div>`;
   $('modal').style.display='flex'; }
-function drvStart(list,name){ drvBusy=true; closePanel(); NA.driveDownload(JSON.stringify(list.map(f=>({id:f.id,name:f.name})))); drvBox('Bắt đầu tải '+name+'…'); }
+function drvStart(list,name){ drvBusy=true; closePanel(); NA.driveDownload(JSON.stringify(list.map(f=>({id:f.id,name:f.name,size:f.size||-1})))); drvBox('Bắt đầu tải '+name+'…'); }
 function drvBox(html){ const b=$('dlbox'); if(!html){ b.style.display='none'; return; } b.innerHTML=`<div style="flex:1">${html}</div><button class="b r" style="padding:6px 10px" onclick="drvCancel()">Dừng</button>`; b.style.display='flex'; }
 function drvCancel(){ if(NA&&NA.driveCancel) NA.driveCancel(); }
 const mb=x=>(x/1048576).toFixed(x<1048576*10?1:0);
