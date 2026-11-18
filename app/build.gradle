@@ -10,8 +10,8 @@ android {
         applicationId 'vn.haido.mo'
         minSdk 24
         targetSdk 34
-        versionCode 18
-        versionName '1.17'
+        versionCode 19
+        versionName '1.18'
     }
 
     // Dùng một khoá ký cố định để các bản build sau cài đè được lên bản trước (không mất dữ liệu)
@@ -37,4 +37,9 @@ android {
     androidResources { noCompress 'mbtiles' }
 
     lint { abortOnError false; checkReleaseBuilds false }
+}
+
+dependencies {
+    // cổng COM qua cáp USB OTG (CP210x, CH340, PL2303, FTDI, CDC-ACM…)
+    implementation 'com.github.mik3y:usb-serial-for-android:3.8.0'
 }
