@@ -882,59 +882,19 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     // ---------- AIS ----------
-    void stopAis() {
-        Thread t = aisThread;
-        aisThread = null;
-        if (t != null) t.interrupt();
-        try { if (aisSock != null) aisSock.close(); } catch (Exception ignored) {}
-        try { if (aisUdp != null) aisUdp.close(); } catch (Exception ignored) {}
-        aisSock = null;
-        aisUdp = null;
-    }
-
-    void aisStatus(String s) { js("window.onAisStatus&&onAisStatus(" + JSONObject.quote(s) + ")"); }
-
-    void startAis(final String host, final int port, final boolean udp) {
-        stopAis();
-        Thread t = new Thread(() -> {
-            Thread me = Thread.currentThread();
-            while (aisThread == me) {
-                try {
-                    aisStatus("Đang kết nối…");
-                    if (udp) {
-                        DatagramSocket ds = new DatagramSocket(null);
-                        ds.setReuseAddress(true);
-                        ds.bind(new InetSocketAddress(port));
-                        aisUdp = ds;
-                        aisStatus("Đang nghe UDP cổng " + port);
-                        byte[] buf = new byte[4096];
-                        while (aisThread == me) {
-                            DatagramPacket pk = new DatagramPacket(buf, buf.length);
-                            ds.receive(pk);
-                            String txt = new String(pk.getData(), 0, pk.getLength(), StandardCharsets.US_ASCII);
-                            for (String ln : txt.split("[\\r\\n]+")) nmea(ln);
-                        }
-                    } else {
-                        Socket sk = new Socket();
-                        aisSock = sk;
-                        sk.connect(new InetSocketAddress(host, port), 8000);
-                        aisStatus("Đã kết nối " + host + ":" + port);
-                        BufferedReader r = new BufferedReader(new InputStreamReader(sk.getInputStream(), StandardCharsets.US_ASCII));
-                        String ln;
-                        while (aisThread == me && (ln = r.readLine()) != null) nmea(ln);
-                    }
-                } catch (Exception e) {
-                    if (aisThread == me) aisStatus("Mất kết nối, thử lại sau 5 giây");
-                }
-                try { if (aisSock != null) aisSock.close(); } catch (Exception ignored) {}
-                try { if (aisUdp != null) aisUdp.close(); } catch (Exception ignored) {}
-                if (aisThread != me) break;
-                try { Thread.sleep(5000); } catch (InterruptedException e) { break; }
+    // ---------- Kết nối thiết bị (TCP / UDP / USB-COM) ----------
+    Conns conns;
+    Conns conns() {
+        if (conns == null) conns = new Conns(this, new Conns.Sink() {
+            @Override public void line(String id, String ln) { nmea(id, ln); }
+            @Override public void status(String id, String st) {
+                js("window.onConnStatus&&onConnStatus(" + JSONObject.quote(id) + "," + JSONObject.quote(st) + ")");
             }
         });
-        aisThread = t;
-        t.start();
+        return conns;
     }
+    void stopAis() { if (conns != null) conns.closeAll(); }
+    void aisStatus(String s) { js("window.onAisStatus&&onAisStatus(" + JSONObject.quote(s) + ")"); }
 
     // Gom các câu NMEA (AIS "!" và GPS/la bàn "$") gửi sang giao diện 5 lần mỗi giây
     final StringBuilder nmeaBuf = new StringBuilder();
@@ -947,12 +907,12 @@ public class MainActivity extends Activity implements LocationListener {
         }
     };
 
-    void nmea(String ln) {
+    void nmea(String id, String ln) {
         ln = ln.trim();
         if (ln.length() < 6 || ln.length() > 300) return;
         if (ln.indexOf('!') < 0 && ln.indexOf('$') < 0) return;
         synchronized (nmeaBuf) {
-            if (nmeaBuf.length() < 200000) nmeaBuf.append(ln).append('\n');
+            if (nmeaBuf.length() < 200000) nmeaBuf.append(id).append('\t').append(ln).append('\n');
             if (nmeaPending) return;
             nmeaPending = true;
         }
@@ -1059,7 +1019,13 @@ public class MainActivity extends Activity implements LocationListener {
             });
         }
 
-        @JavascriptInterface public void aisConnect(String host, int port, String proto) { startAis(host, port, "udp".equals(proto)); }
+        @JavascriptInterface public void connOpen(String json) { conns().open(json); }
+        @JavascriptInterface public void connClose(String id) { conns().close(id); }
+        @JavascriptInterface public void connSend(String id, String text) { conns().send(id, text); }
+        @JavascriptInterface public String listSerial() { return conns().listUsb(); }
+        @JavascriptInterface public void aisConnect(String host, int port, String proto) {
+            try { conns().open(new JSONObject().put("id", "c0").put("type", proto).put("host", host).put("port", port).toString()); } catch (Exception ignored) {}
+        }
 
         @JavascriptInterface public void aisDisconnect() { stopAis(); aisStatus("Đã ngắt"); }
 
