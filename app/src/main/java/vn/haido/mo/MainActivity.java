@@ -771,6 +771,16 @@ public class MainActivity extends Activity implements LocationListener {
                 if (!name.matches("(?i).*\\.(mbtiles|kap|sqlitedb)$")) continue;
                 File out = new File(chartDir(), name);
                 if (out.exists() && fid.equals(driveMeta().optString(name))) { skip++; continue; }
+                long need = f.optLong("size", -1);
+                if (need > 0) {
+                    File part = new File(out.getPath() + ".part");
+                    long left = need - (part.exists() ? part.length() : 0), free = chartDir().getUsableSpace();
+                    if (free < left + (50L << 20)) {
+                        fail++;
+                        err = "Không đủ bộ nhớ để tải " + name + ": cần " + (left >> 20) + " MB, máy còn trống " + (free >> 20) + " MB. Hãy dọn bớt ảnh, video hoặc hải đồ cũ rồi tải lại.";
+                        break;
+                    }
+                }
                 String e = driveOne(fid, name, out, i + 1, n);
                 if (e == null) ok++; else { fail++; if (err.isEmpty()) err = name + ": " + e; }
             }
@@ -1006,6 +1016,8 @@ public class MainActivity extends Activity implements LocationListener {
         }
         @JavascriptInterface public void driveCancel() { dlCancel = true; }
         @JavascriptInterface public String driveState() { return driveMeta().toString(); }
+        // dung lượng còn trống nơi lưu hải đồ (byte)
+        @JavascriptInterface public double freeSpace() { return (double) chartDir().getUsableSpace(); }
 
         @JavascriptInterface public void deleteChart(String id) {
             infos.remove(id);
