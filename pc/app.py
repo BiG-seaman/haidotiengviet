@@ -747,6 +747,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 DRIVE["cancel"] = False
                 threading.Thread(target=drive_run, args=(b,), daemon=True).start()
                 return self.send(204)
+            if p == "/api/split":
+                if SPLIT["busy"]:
+                    toast("Đang chia tệp, vui lòng đợi…")
+                    return self.send(204)
+                SPLIT["busy"] = True
+                SPLIT["cancel"] = False
+                threading.Thread(target=split_pick, args=(int(q.get("mb", "500") or 500),), daemon=True).start()
+                return self.send(204)
+            if p == "/api/split_cancel":
+                SPLIT["cancel"] = True
+                return self.send(204)
             if p == "/api/drive_cancel":
                 DRIVE["cancel"] = True
                 return self.send(204)
@@ -834,7 +845,7 @@ def drive_run(body):
             if not re.search(r"(?i)\.(mbtiles|kap|sqlitedb)$", name):
                 continue
             out = os.path.join(DRIVE_DIR, name)
-            if os.path.exists(out) and drive_meta().get(name) == f.get("id"):
+            if not f.get("force") and os.path.exists(out) and drive_meta().get(name) == f.get("id"):
                 skip += 1
                 continue
             need = int(f.get("size") or -1)
@@ -882,6 +893,42 @@ def device_id():
         except Exception:
             pass
         return "file|" + v
+
+
+SPLIT = {"busy": False, "cancel": False}
+
+
+def split_pick(mb):
+    """Chọn tệp MBTiles lớn rồi chia thành các tệp nhỏ ≤ mb MB, để cạnh tệp gốc trong thư mục *_chia_nho."""
+    try:
+        import splitter
+        with DIALOG_LOCK:
+            paths = dialog("open", True, ["MBTiles (*.mbtiles)", "Tất cả (*.*)"])
+        if not paths:
+            return
+        done, last_dir = [], None
+        for k, src in enumerate(paths, 1):
+            out_dir = os.path.join(os.path.dirname(src), os.path.splitext(os.path.basename(src))[0] + "_chia_nho")
+            pre = ("(%d/%d) " % (k, len(paths))) if len(paths) > 1 else ""
+            EV.send("onSplitProgress", 0, 1, pre + "Đang đo dung lượng " + os.path.basename(src) + "…")
+            outs = splitter.split_mbtiles(src, out_dir, mb << 20,
+                                          progress=lambda a, b, t: EV.send("onSplitProgress", a, b, pre + t),
+                                          cancel=lambda: SPLIT["cancel"])
+            done += outs
+            last_dir = out_dir
+        tot = sum(sz for _, sz in done)
+        EV.send("onSplitDone", "Đã chia thành %d tệp (%.1f GB) trong thư mục: %s" % (len(done), tot / 1073741824, last_dir))
+        try:
+            os.startfile(last_dir)      # mở thư mục kết quả (Windows)
+        except Exception:
+            pass
+    except InterruptedError:
+        EV.send("onSplitDone", "Đã dừng chia tệp")
+    except Exception as e:
+        log("split failed", e)
+        EV.send("onSplitDone", "Lỗi khi chia tệp: %s" % e)
+    finally:
+        SPLIT["busy"] = False
 
 
 def pick_mbtiles():
