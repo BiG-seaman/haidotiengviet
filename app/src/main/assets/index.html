@@ -135,7 +135,7 @@ let set = Object.assign({osm:true, sea:true, charts:{}, night:false, fmt:'dms', 
                          alm:{xte:true,xteNm:0.2,cpa:true,cpaNm:2,tcpaMin:15}, posSrc:'auto', aisLabel:'name', planKn:6,
                          own:{mmsi:'',vecMin:10,rings:0,ringNm:0.5}, aiso:{lostMin:3,delMin:10,rangeOn:false,rangeNm:20,ignAnch:true,anchKn:0.2,vecMin:10},
                          view:{lat:16.0,lon:108.6,zoom:6}}, store.load('settings')||{});
-const APP_VER='1.19';
+const APP_VER='1.20';
 let charts = [];           // tệp MBTiles đã nạp
 const saveSet = () => store.save('settings', set);
 
@@ -1109,9 +1109,9 @@ async function licVerify(code,id){ const c=cleanCode(code); if(c.length<110||!LI
     const p=b.slice(0,6), msg=new Uint8Array([...p,...new TextEncoder().encode('HDVN|'+id)]);
     if(!await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},licKey,b.slice(6,70),msg)) return null;
     return {type:p[1]===2?'paid':'trial', exp:LIC_EPOCH+(((p[2]<<24)|(p[3]<<16)|(p[4]<<8)|p[5])>>>0)*60000, code:c}; }catch(e){ return null; } }
-async function licApply(code,src){ const v=await licVerify(code,licSt.id); if(!v) return false;
+async function licApply(code,src,ended){ const v=await licVerify(code,licSt.id); if(!v) return false;
   const cur=lic.code?await licVerify(lic.code,licSt.id):null;
-  if(!cur||v.exp>cur.exp||(v.type==='paid'&&cur.type!=='paid'&&v.exp>=licNow())){ lic.code=v.code; store.save('lic',lic); }
+  if(!cur||v.exp>cur.exp||(v.type==='paid'&&cur.type!=='paid'&&v.exp>=licNow())||(ended&&v.type==='trial'&&cur.type==='trial')){ /* ended: chủ phần mềm đã bấm End dùng thử */ lic.code=v.code; store.save('lic',lic); }
   return true; }
 async function licEval(){ const v=lic.code?await licVerify(lic.code,licSt.id):null, now=licNow();
   licSt.type=v?v.type:null; licSt.exp=v?v.exp:0; licSt.ok=!!v&&v.exp>now; licSt.ready=true;
@@ -1122,7 +1122,7 @@ let licSyncT=0;
 async function licSync(manual){ if(!licSt.id||!LIC_URL.startsWith('http')) return; licSyncT=Date.now();
   try{ const had=licSt.ok, j=await licPost('/trial',{id:licSt.id,plat:PC?'windows':'android',ver:APP_VER});
     if(j.error){ if(manual) lockMsg(j.error); return; }
-    const was=licSt.type; await licApply(j.code); await licEval();
+    const was=licSt.type; await licApply(j.code,null,j.ended); await licEval(); updShow(j.upd);
     if(!had&&licSt.ok&&j.type==='trial'&&!was) toast('Bắt đầu dùng thử 7 ngày – còn '+fmtLeft(licSt.exp-licNow()));
     if(manual&&!licSt.ok) lockMsg(j.type==='trial'?'Máy này đã hết thời gian dùng thử. Vui lòng nhập mã bản quyền.':'');
   }catch(e){ if(manual) lockMsg('Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.'); } }
@@ -1170,6 +1170,18 @@ setInterval(()=>{ if(!licSt.ready) return; if(licSt.ok&&licSt.exp<=licNow()) lic
   if(Date.now()-licSyncT>6*3600000) licSync(false); },30000);
 window.addEventListener('online',()=>{ if(!licSt.ok) licSync(false); });
 licInit();
+
+/* ================= Thông báo có phiên bản mới =================
+   Máy chủ bản quyền trả về j.upd = {ver,url,note,msg} khi máy đang dùng bản cũ hơn bản anh khai ở trang quản lý. */
+let updInfo=null;
+function updShow(u){ updInfo=u||null; const old=$('updbar'); if(!u){ if(old) old.remove(); return; }
+  const snz=store.load('updsnz')||{}; if(snz.ver===u.ver&&Date.now()-snz.t<24*3600000) return;   // "Để sau": nhắc lại sau 24 giờ
+  const b=old||document.createElement('div'); b.id='updbar';
+  b.style.cssText='position:fixed;left:50%;top:12px;transform:translateX(-50%);width:min(440px,calc(100% - 24px));z-index:60;background:#0f3b5f;color:#fff;border:2px solid #4fc3f7;border-radius:14px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:15px;line-height:1.4';
+  b.innerHTML='<b style="font-size:16px">⬆️ Có phiên bản mới '+esc(u.ver)+'</b><div style="margin:4px 0 10px;opacity:.9">Máy đang dùng bản '+esc(APP_VER)+(u.note?'. '+esc(u.note):'')+'</div><div style="display:flex;gap:8px"><button class="b p" style="flex:1" onclick="updGo()">⬇ Tải về</button><button class="b" style="flex:1" onclick="updLater()">Để sau</button></div>';
+  if(!old) document.body.appendChild(b); }
+function updGo(){ if(!updInfo) return; if(updInfo.url) openUrl(updInfo.url); else openUrl('https://zalo.me/0586568569'); }
+function updLater(){ if(updInfo) store.save('updsnz',{ver:updInfo.ver,t:Date.now()}); const b=$('updbar'); if(b) b.remove(); }
 
 /* ================= Khởi động ================= */
 applyNight(); updFollow(); refreshCharts(); resize(); updTideBox(); setTimeout(()=>autoTide(),1500);
