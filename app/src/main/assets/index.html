@@ -1159,7 +1159,7 @@ function showLicense(){ const left=licSt.exp-licNow();
    <div class="grid"><button class="b p" onclick="licEnter($('lcode2').value)">✔ Kích hoạt</button><button class="b" onclick="licSync(true).then(()=>showLicense())">↻ Đồng bộ</button></div>${contactBtns()}</div>`); }
 async function licInit(){ try{ licSt.id=await machineId(); }catch(e){ licSt.id='A00000000000'; }
   await licEval();
-  if(!licSt.ok||Date.now()-(lic.syncT||0)>6*3600000) licSync(false).then(()=>{ lic.syncT=Date.now(); store.save('lic',lic); });
+  if(!licSt.ok||Date.now()-(lic.syncT||0)>30*60000) licSync(false).then(()=>{ lic.syncT=Date.now(); store.save('lic',lic); });
   licWarn(); }
 let licWarnT=0;
 function licWarn(){ if(!licSt.ok) return; const left=licSt.exp-licNow();
@@ -1167,7 +1167,7 @@ function licWarn(){ if(!licSt.ok) return; const left=licSt.exp-licNow();
     toast((licSt.type==='trial'?'Dùng thử':'Bản quyền')+' còn '+fmtLeft(left)+' – liên hệ Mr Công 0586 568 569 để '+(licSt.type==='trial'?'mua mã':'gia hạn')); } }
 setInterval(()=>{ if(!licSt.ready) return; if(licSt.ok&&licSt.exp<=licNow()) licEval(); else licWarn();
   if(Date.now()>(lic.seen||0)){ lic.seen=Date.now(); if(Date.now()-(lic.savedT||0)>600000){ lic.savedT=Date.now(); store.save('lic',lic); } }
-  if(Date.now()-licSyncT>6*3600000) licSync(false); },30000);
+  if(Date.now()-licSyncT>3600000) licSync(false); },30000);
 window.addEventListener('online',()=>{ if(!licSt.ok) licSync(false); });
 licInit();
 
@@ -1178,7 +1178,7 @@ function updShow(u){ updInfo=u||null; const old=$('updbar'); if(!u){ if(old) old
   const snz=store.load('updsnz')||{}; if(snz.ver===u.ver&&Date.now()-snz.t<24*3600000) return;   // "Để sau": nhắc lại sau 24 giờ
   const b=old||document.createElement('div'); b.id='updbar';
   b.style.cssText='position:fixed;left:50%;top:12px;transform:translateX(-50%);width:min(440px,calc(100% - 24px));z-index:60;background:#0f3b5f;color:#fff;border:2px solid #4fc3f7;border-radius:14px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:15px;line-height:1.4';
-  b.innerHTML='<b style="font-size:16px">⬆️ Có phiên bản mới '+esc(u.ver)+'</b><div style="margin:4px 0 10px;opacity:.9">Máy đang dùng bản '+esc(APP_VER)+(u.note?'. '+esc(u.note):'')+'</div><div style="display:flex;gap:8px"><button class="b p" style="flex:1" onclick="updGo()">⬇ Tải về</button><button class="b" style="flex:1" onclick="updLater()">Để sau</button></div>';
+  b.innerHTML='<b style="font-size:16px">⬆️ Có phiên bản mới '+esc(u.ver)+'</b><div style="margin:4px 0 10px;opacity:.9">Máy đang dùng bản '+esc(APP_VER)+(u.note?'. '+esc(u.note):'')+'</div><div style="display:flex;gap:8px"><button class="b p" style="flex:1" onclick="updGo()">⬇ Tải về</button><button class="b" id="updlater" style="flex:1" onclick="updLater()">Để sau</button></div>';
   if(!old) document.body.appendChild(b); }
 function updGo(){ if(!updInfo) return; if(updInfo.url) openUrl(updInfo.url); else openUrl('https://zalo.me/0586568569'); }
 function updLater(){ if(updInfo) store.save('updsnz',{ver:updInfo.ver,t:Date.now()}); const b=$('updbar'); if(b) b.remove(); }
