@@ -4,14 +4,14 @@ plugins {
 
 android {
     namespace 'vn.haido.mo'
-    compileSdk 34
+    compileSdk 37
 
     defaultConfig {
         applicationId 'vn.haido.mo'
         minSdk 24
         targetSdk 34
-        versionCode 22
-        versionName '1.21'
+        versionCode 25
+        versionName '1.24'
     }
 
     // Dùng một khoá ký cố định để các bản build sau cài đè được lên bản trước (không mất dữ liệu)

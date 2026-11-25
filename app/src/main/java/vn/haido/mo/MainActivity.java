@@ -83,16 +83,16 @@ public class MainActivity extends Activity implements LocationListener {
                 if (tone == null) tone = new ToneGenerator(AudioManager.STREAM_ALARM, 100);
                 tone.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 800);
                 Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-                if (v != null) v.vibrate(500);
+                if (v != null) {
+                    if (android.os.Build.VERSION.SDK_INT >= 26)
+                        v.vibrate(android.os.VibrationEffect.createOneShot(500, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+                    else
+                        v.vibrate(500);
+                }
             } catch (Exception ignored) {}
             ui.postDelayed(this, 1200);
         }
     };
-
-    // AIS
-    volatile Thread aisThread;
-    volatile Socket aisSock;
-    volatile DatagramSocket aisUdp;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -180,9 +180,11 @@ public class MainActivity extends Activity implements LocationListener {
         try { if (lm != null && gnssCb != null) lm.unregisterGnssStatusCallback(gnssCb); } catch (Exception ignored) {}
         alarmOn = false;
         ui.removeCallbacks(alarmTick);
+        ui.removeCallbacks(nmeaFlush);
         if (tone != null) tone.release();
-        stopAis();
+        if (conns != null) { conns.destroy(); conns = null; }
         for (String id : new java.util.ArrayList<>(dbs.keySet())) closePool(id);
+        if (web != null) { web.destroy(); web = null; }
         super.onDestroy();
     }
 

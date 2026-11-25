@@ -31,6 +31,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Nhiều kết nối NMEA 0183 cùng lúc (giống trang "Kết nối" của OpenCPN):
@@ -49,6 +51,9 @@ public class Conns {
     final Context ctx;
     final Sink sink;
     final Map<String, Conn> conns = new ConcurrentHashMap<>();
+    final ExecutorService sendExec = Executors.newSingleThreadExecutor();
+    ConnectivityManager.NetworkCallback netCb;
+    volatile Network cachedWifiNet;
 
     static final long NO_DATA_MS = 15000;      // không có dữ liệu quá lâu = coi như mất kết nối (thiết bị khởi động lại, mất Wi-Fi…)
 
@@ -57,21 +62,26 @@ public class Conns {
         // Wi-Fi vừa có lại (vd AIS Pilot khởi động xong) → kết nối lại ngay, không chờ
         try {
             ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
-            cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),
-                new ConnectivityManager.NetworkCallback() {
-                    @Override public void onAvailable(Network n) { kick(); }
-                    @Override public void onLost(Network n) { kick(); }
-                });
+            netCb = new ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(Network n) { cachedWifiNet = n; kick(); }
+                @Override public void onLost(Network n) { if (n.equals(cachedWifiNet)) cachedWifiNet = null; kick(); }
+            };
+            cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), netCb);
         } catch (Exception ignored) {}
     }
 
     /** Mạng Wi-Fi hiện có (kể cả Wi-Fi "không có internet" của AIS Pilot), để kết nối không bị Android đẩy sang 4G. */
     Network wifiNet() {
+        Network cached = cachedWifiNet;
+        if (cached != null) return cached;
         try {
             ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
             for (Network n : cm.getAllNetworks()) {
                 NetworkCapabilities c = cm.getNetworkCapabilities(n);
-                if (c != null && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return n;
+                if (c != null && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    cachedWifiNet = n;
+                    return n;
+                }
             }
         } catch (Exception ignored) {}
         return null;
@@ -178,6 +188,7 @@ public class Conns {
         void runUdp() throws Exception {
             DatagramSocket ds = new DatagramSocket(null);
             ds.setReuseAddress(true);
+            ds.setBroadcast(true);
             ds.bind(new InetSocketAddress(port));
             udp = ds;
             Network wn = wifiNet();
@@ -186,14 +197,19 @@ public class Conns {
             sink.status(id, "Đang nghe UDP cổng " + port);
             byte[] buf = new byte[8192];
             long last = System.currentTimeMillis();
+            boolean quiet = false;
             while (run) {
                 DatagramPacket pk = new DatagramPacket(buf, buf.length);
                 try { ds.receive(pk); }
                 catch (SocketTimeoutException te) {
-                    if (System.currentTimeMillis() - last > NO_DATA_MS * 2) throw new Exception("không nhận dữ liệu UDP");
+                    if (!quiet && System.currentTimeMillis() - last > NO_DATA_MS) {
+                        quiet = true;
+                        sink.status(id, "Đang chờ dữ liệu UDP cổng " + port + "…");
+                    }
                     continue;
                 }
                 last = System.currentTimeMillis();
+                if (quiet) { quiet = false; sink.status(id, "Đang nhận UDP cổng " + port); }
                 String txt = new String(pk.getData(), 0, pk.getLength(), StandardCharsets.US_ASCII);
                 for (String ln : txt.split("[\\r\\n]+")) sink.line(id, ln);
             }
@@ -321,15 +337,34 @@ public class Conns {
 
     public void closeAll() { for (String id : conns.keySet()) close(id); }
 
-    /** Gửi câu NMEA ra kết nối (máy lái tự động / thiết bị nhận). */
+    public void destroy() {
+        closeAll();
+        try {
+            if (netCb != null) {
+                ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(netCb);
+                netCb = null;
+            }
+        } catch (Exception ignored) {}
+        sendExec.shutdownNow();
+    }
+
+    /** Gửi câu NMEA ra kết nối (máy lái tự động / thiết bị nhận) tuần tự, tránh trộn byte. */
     public void send(String id, final String text) {
         final Conn c = conns.get(id);
-        if (c == null || c.out == null) return;
-        new Thread(() -> {
-            try {
-                OutputStream o = c.out;
-                if (o != null) { o.write(text.getBytes(StandardCharsets.US_ASCII)); o.flush(); }
-            } catch (Exception ignored) {}
-        }).start();
+        if (c == null || c.out == null || sendExec.isShutdown()) return;
+        try {
+            sendExec.execute(() -> {
+                try {
+                    OutputStream o = c.out;
+                    if (o != null) {
+                        synchronized (c) {
+                            o.write(text.getBytes(StandardCharsets.US_ASCII));
+                            o.flush();
+                        }
+                    }
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
     }
 }
